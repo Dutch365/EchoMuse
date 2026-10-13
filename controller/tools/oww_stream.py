@@ -7,23 +7,24 @@ convolutions are unpadded in time and its pooling has a total stride of 8, so
 the same outputs can be had by keeping the tail of a layer's input from the
 previous call.
 
-    make_streaming.py embedding_model.onnx out.onnx [--stock] [--no-clip]
-                      [--per-conv] [--nchw-states]
+    oww_stream.py embedding_model.onnx out.onnx [--stock] [--no-clip]
+                  [--per-block] [--nchw-states]
 
 Inputs:  mel [1, 8, 32, 1], state_0..state_N (zeros to start)
 Outputs: embedding [1, 96], state_0_next..state_N_next
 The first 9 calls are warm-up; from the 10th the output equals the stock
 model's on the last 76 frames fed.
 
-Three choices, each measured on an Echo (README):
+Three choices, each measured on an Echo (device/tools/oww_stream/README.md).
+The defaults are the fastest of each:
 
   activation   The model's activation is Max(LeakyRelu(x, 0.2), -0.4), two
                nodes the accelerated backend does not run. It equals
                LeakyRelu(Clip(x, min=-2)), and a Clip after a Conv is fused
                into the Conv. --no-clip keeps the original pair.
-  states       One state per block of convolutions between time poolings (4),
-               not one per convolution (11, --per-conv): fewer nodes, a few
-               more rows of arithmetic.
+  states       One state per convolution that looks across time (11).
+               --per-block keeps one per block of convolutions between time
+               poolings (4): fewer nodes, more rows recomputed, and slower.
   layout       States cross the model boundary in NHWC, which is the layout
                the backend computes in, so no Transpose runs per state.
                --nchw-states keeps them NCHW.
@@ -81,8 +82,10 @@ def main():
     ap.add_argument("dst")
     ap.add_argument("--stock", action="store_true")
     ap.add_argument("--no-clip", action="store_true")
-    ap.add_argument("--per-conv", action="store_true")
+    ap.add_argument("--per-block", action="store_true")
     ap.add_argument("--nchw-states", action="store_true")
+    ap.add_argument("--perturb", action="store_true",
+                    help="scale one weight tensor: a streaming model that is WRONG, for testing the firmware's self-check")
     a = ap.parse_args()
 
     m = onnx.load(a.src)
@@ -105,6 +108,9 @@ def main():
         print(f"{a.dst}: stock shape, {clipped} activations rewritten")
         return
 
+    if a.perturb:
+        big = max((i for i in inits if len(i.dims) == 4), key=lambda i: int(np.prod(i.dims)))
+        inits[inits.index(big)] = numpy_helper.from_array(numpy_helper.to_array(big) * 1.05, big.name)
     inits = [i for i in inits if i.name not in (first.input[1], last.input[1])]
     inits += [_const("stream_in_shape", [1, 1, STEP, 32]), _const("stream_out_shape", [1, 96]),
               _const("tail_end", [2 ** 31]), _const("time_axis", [2])]
@@ -119,7 +125,7 @@ def main():
     # one of each block between time poolings, carrying 2 rows per
     # time-convolution it has to feed.
     points, rows = [], []
-    if a.per_conv:
+    if not a.per_block:
         for i, n in enumerate(body):
             if time_kernel(n):
                 points.append(i)

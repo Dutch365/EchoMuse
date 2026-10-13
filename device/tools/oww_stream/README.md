@@ -1,13 +1,13 @@
 # oww_stream: openWakeWord's embedding, 8 new frames per call (#893)
 
-`make_streaming.py` rewrites the stock `embedding_model.onnx` so each call
+`controller/tools/oww_stream.py` rewrites the stock `embedding_model.onnx` so each call
 takes the 8 mel frames that are new, plus a few small state tensors, in place
 of a 76-frame window that is 90% the same as the last one. The output equals
 the stock model's on the last 76 frames fed.
 
 ```sh
-python make_streaming.py embedding_model.onnx embedding_stream.onnx   # needs onnx, numpy
-python make_streaming.py embedding_model.onnx embedding_clip.onnx --stock
+python controller/tools/oww_stream.py embedding_model.onnx embedding_stream.onnx   # needs onnx, numpy
+python controller/tools/oww_stream.py embedding_model.onnx embedding_clip.onnx --stock
 ```
 
 `--stock` keeps the 76-frame input and only rewrites the activation, so the
@@ -60,4 +60,30 @@ A per-node profile of the first streaming version is what pointed at these:
 Max, Transpose, Slice and Concat. What is left at 7.9 ms is mostly that
 per-convolution floor, which is the runtime's and not the model's.
 
-Nothing in the firmware uses the streaming model yet.
+## In the firmware
+
+The controller image builds `embedding_stream.onnx` (the Dockerfile's
+`oww_stream` stage, input and output pinned by sha256) and installs it with
+the other wake word assets. The firmware uses it when it is there:
+
+- `wakeword.Detector` feeds the 8 new frames per chunk and rebuilds the
+  state from its mel ring on the first window, after a reset, and whenever
+  the window has not moved by exactly 8 frames.
+- At load, `ort.Inferer` runs one fixed sequence through both embedding
+  models and uses the streaming one only if they agree. A file that is
+  missing, is not a streaming model or disagrees leaves the Echo scoring
+  with the stock model; the `[shadow]` start line says which.
+- A model installed while the firmware runs is picked up on the next config
+  push, which the controller sends after installing it.
+
+Whole scorer through the firmware's own code (`oww_probe`, VVV, 30 s each,
+both passing the Python fixture on the Echo): **stock 41.1% of one core, p50
+29.2 ms; streaming 23.1%, p50 17.3 ms.**
+
+That is 4.8 ms a frame more than the embedding costs alone in the C probe
+above (7.9 ms), with the melspectrogram and classifier taking the same 4.6 ms
+either way. Pinning the calling thread changed nothing. Not yet explained;
+the three models now run back to back on tensors too small to dominate, so
+cache eviction between them is the first thing to measure.
+
+`oww_probe -no-stream` times the stock path on a device that has both.
