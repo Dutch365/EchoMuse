@@ -1,10 +1,11 @@
 /* stream_probe: stock vs streaming openWakeWord embedding on the device.
  *
- *   stream_probe LIB STOCK.onnx STREAM.onnx [seconds] [xnnpack 0|1]
+ *   stream_probe LIB STOCK.onnx seconds xnnpack(0|1) MODEL.onnx...
  *
- * Phase 1 feeds the same mel frames to both and compares the embeddings.
- * Phase 2 runs each at the real duty cycle (one call per 80 ms) and reports
- * process CPU, in the lines device/tools/oww_probe prints.
+ * Each MODEL (stock shape, or streaming with any number of states) is fed the
+ * same mel frames as STOCK and its embeddings compared, then run at the real
+ * duty cycle (one call per 80 ms) and its process CPU reported, in the lines
+ * device/tools/oww_probe prints.
  * Session options are the firmware's: 1 thread, ORT_ENABLE_ALL, no spinning.
  */
 #include <dlfcn.h>
@@ -80,63 +81,68 @@ static void run_stock(OrtSession *s, float *win, float *emb) {
 }
 
 /* streaming: 8 new frames and the states in, embedding and next states out */
-static char in_names[NSTATE + 1][24], out_names[NSTATE + 1][24];
-static const char *inp[NSTATE + 1], *outp[NSTATE + 1];
-static float *state[NSTATE]; static size_t state_n[NSTATE]; static int64_t state_shape[NSTATE][4];
+#define MAXS 16
+typedef struct {
+	OrtSession *s; int n;                       /* n states; 0 = stock shape */
+	char in_names[MAXS + 1][32], out_names[MAXS + 1][32];
+	const char *inp[MAXS + 1], *outp[MAXS + 1];
+	float *state[MAXS]; size_t state_n[MAXS]; int64_t shape[MAXS][4];
+} model;
 
-static void stream_init(OrtSession *s) {
+static void model_init(model *m, OrtSession *s) {
 	OrtAllocator *al; CK("alloc", api->GetAllocatorWithDefaultOptions(&al));
 	size_t n; CK("count", api->SessionGetInputCount(s, &n));
-	if (n != NSTATE + 1) { fprintf(stderr, "FAIL streaming model has %zu inputs, want %d\n", n, NSTATE + 1); exit(1); }
-	strcpy(in_names[0], "mel"); strcpy(out_names[0], "embedding");
-	for (int k = 0; k < NSTATE; k++) {
-		snprintf(in_names[k + 1], 24, "state_%d", k);
-		snprintf(out_names[k + 1], 24, "state_%d_next", k);
-	}
+	m->s = s; m->n = (int)n - 1;
+	if (m->n > MAXS) { fprintf(stderr, "FAIL %zu inputs\n", n); exit(1); }
+	if (m->n == 0) return;
+	strcpy(m->in_names[0], "mel"); strcpy(m->out_names[0], "embedding");
 	for (size_t i = 0; i < n; i++) {
 		char *name; CK("name", api->SessionGetInputName(s, i, al, &name));
 		int k = -1;
-		if (sscanf(name, "state_%d", &k) == 1 && k >= 0 && k < NSTATE) {
+		if (sscanf(name, "state_%d", &k) == 1 && k >= 0 && k < m->n) {
 			OrtTypeInfo *ti; CK("ti", api->SessionGetInputTypeInfo(s, i, &ti));
 			const OrtTensorTypeAndShapeInfo *tsi; CK("cast", api->CastTypeInfoToTensorInfo(ti, &tsi));
-			CK("dims", api->GetDimensions(tsi, state_shape[k], 4));
-			state_n[k] = (size_t)(state_shape[k][0] * state_shape[k][1] * state_shape[k][2] * state_shape[k][3]);
-			state[k] = calloc(state_n[k], sizeof(float));
+			CK("dims", api->GetDimensions(tsi, m->shape[k], 4));
+			m->state_n[k] = (size_t)(m->shape[k][0] * m->shape[k][1] * m->shape[k][2] * m->shape[k][3]);
+			m->state[k] = calloc(m->state_n[k], sizeof(float));
+			snprintf(m->in_names[k + 1], 32, "state_%d", k);
+			snprintf(m->out_names[k + 1], 32, "state_%d_next", k);
 			api->ReleaseTypeInfo(ti);
 		}
 		al->Free(al, name);
 	}
-	for (int i = 0; i <= NSTATE; i++) { inp[i] = in_names[i]; outp[i] = out_names[i]; }
+	for (int i = 0; i <= m->n; i++) { m->inp[i] = m->in_names[i]; m->outp[i] = m->out_names[i]; }
 }
-static void stream_reset(void) { for (int k = 0; k < NSTATE; k++) memset(state[k], 0, state_n[k] * sizeof(float)); }
+static void model_reset(model *m) { for (int k = 0; k < m->n; k++) memset(m->state[k], 0, m->state_n[k] * sizeof(float)); }
 
-static void run_stream(OrtSession *s, float *mel8, float *emb) {
+/* one step: `mel` points at the newest 8 frames, with 68 older ones before it */
+static void step(model *m, float *mel, float *emb) {
+	if (m->n == 0) { run_stock(m->s, mel - (WIN - STEP) * MELS, emb); return; }
 	int64_t sh[4] = {1, STEP, MELS, 1};
-	OrtValue *in[NSTATE + 1], *out[NSTATE + 1];
-	in[0] = tensor(mel8, STEP * MELS, sh, 4);
-	for (int k = 0; k < NSTATE; k++) in[k + 1] = tensor(state[k], state_n[k], state_shape[k], 4);
+	OrtValue *in[MAXS + 1], *out[MAXS + 1];
+	in[0] = tensor(mel, STEP * MELS, sh, 4);
+	for (int k = 0; k < m->n; k++) in[k + 1] = tensor(m->state[k], m->state_n[k], m->shape[k], 4);
 	memset(out, 0, sizeof(out));
-	CK("run stream", api->Run(s, NULL, inp, (const OrtValue *const *)in, NSTATE + 1, outp, NSTATE + 1, out));
+	CK("run stream", api->Run(m->s, NULL, m->inp, (const OrtValue *const *)in, m->n + 1, m->outp, m->n + 1, out));
 	float *p; CK("data", api->GetTensorMutableData(out[0], (void **)&p));
 	memcpy(emb, p, EMB * sizeof(float));
-	for (int k = 0; k < NSTATE; k++) {
+	for (int k = 0; k < m->n; k++) {
 		CK("state", api->GetTensorMutableData(out[k + 1], (void **)&p));
-		memcpy(state[k], p, state_n[k] * sizeof(float));
+		memcpy(m->state[k], p, m->state_n[k] * sizeof(float));
 	}
-	for (int i = 0; i <= NSTATE; i++) { api->ReleaseValue(in[i]); api->ReleaseValue(out[i]); }
+	for (int i = 0; i <= m->n; i++) { api->ReleaseValue(in[i]); api->ReleaseValue(out[i]); }
 }
 
 static int cmp(const void *a, const void *b) { double d = *(const double *)a - *(const double *)b; return (d > 0) - (d < 0); }
 
-typedef void (*step_fn)(OrtSession *, float *, float *);
-static void paced(const char *label, OrtSession *s, step_fn fn, float *buf, int seconds) {
+static void paced(const char *label, model *m, float *mel, int steps, int seconds) {
 	int frames = seconds * 1000 / 80, late = 0;
 	double *lat = malloc(frames * sizeof(double));
 	float emb[EMB];
 	double c0 = cpu_s(), t0 = now_ms();
 	for (int i = 0; i < frames; i++) {
 		double due = t0 + i * 80.0, a = now_ms();
-		fn(s, buf, emb);
+		step(m, mel + (10 + i % (steps - 10)) * STEP * MELS, emb);
 		lat[i] = now_ms() - a;
 		if (lat[i] > 80.0) late++;
 		double left = due + 80.0 - now_ms();
@@ -144,19 +150,17 @@ static void paced(const char *label, OrtSession *s, step_fn fn, float *buf, int 
 	}
 	double wall = (now_ms() - t0) / 1000, cpu = cpu_s() - c0;
 	qsort(lat, frames, sizeof(double), cmp);
-	printf("\n== %s: cost at the real 12.5Hz duty cycle, %ds ==\n", label, seconds);
 	printf("  frames     %d over %.1fs (%d overran their 80ms slot)\n", frames, wall, late);
 	printf("  latency    p50 %.1fms  p95 %.1fms  max %.1fms  (budget 80ms)\n",
 	       lat[frames / 2], lat[frames * 95 / 100], lat[frames - 1]);
 	printf("  CPU        %.1f%% of one core  (%.2fs of CPU in %.1fs wall)\n", 100 * cpu / wall, cpu, wall);
-	struct rusage r; getrusage(RUSAGE_SELF, &r);
-	printf("  RSS        %ld KB peak\n", r.ru_maxrss);
 	free(lat);
+	(void)label;
 }
 
 int main(int argc, char **argv) {
-	if (argc < 4) { fprintf(stderr, "usage: stream_probe LIB STOCK.onnx STREAM.onnx [seconds] [xnnpack 0|1]\n"); return 2; }
-	int seconds = argc > 4 ? atoi(argv[4]) : 30, xnn = argc > 5 ? atoi(argv[5]) : 1;
+	if (argc < 6) { fprintf(stderr, "usage: stream_probe LIB STOCK.onnx seconds xnnpack(0|1) MODEL.onnx...\n"); return 2; }
+	int seconds = atoi(argv[3]), xnn = atoi(argv[4]);
 	void *dl = dlopen(argv[1], RTLD_NOW | RTLD_GLOBAL);
 	if (!dl) { fprintf(stderr, "FAIL dlopen: %s\n", dlerror()); return 1; }
 	const OrtApiBase *(*base)(void) = (const OrtApiBase *(*)(void))dlsym(dl, "OrtGetApiBase");
@@ -164,35 +168,32 @@ int main(int argc, char **argv) {
 	if (!api) { fprintf(stderr, "FAIL runtime too old: %s\n", base()->GetVersionString()); return 1; }
 	OrtEnv *env; CK("env", api->CreateEnv(ORT_LOGGING_LEVEL_ERROR, "probe", &env));
 	CK("mi", api->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi));
-	int x0, x1;
-	OrtSession *stock = open_model(env, argv[2], xnn, &x0), *stream = open_model(env, argv[3], xnn, &x1);
-	stream_init(stream);
-	printf("runtime   onnxruntime %s\nsession   threads=1 xnnpack=%d/%d(requested %d) spinning=0\n",
-	       base()->GetVersionString(), x0, x1, xnn);
+	int x;
+	OrtSession *stock = open_model(env, argv[2], xnn, &x);
+	printf("runtime   onnxruntime %s\nsession   threads=1 xnnpack=%d(requested %d) spinning=0\n",
+	       base()->GetVersionString(), x, xnn);
 
-	/* phase 1: same frames to both */
 	enum { STEPS = 60 };
 	static float mel[STEPS * STEP * MELS];
 	for (size_t i = 0; i < sizeof(mel) / sizeof(mel[0]); i++) mel[i] = rnd();
-	float a[EMB], b[EMB]; double worst = 0, scale = 0; int compared = 0;
-	stream_reset();
-	for (int j = 0; j < STEPS; j++) {
-		run_stream(stream, mel + j * STEP * MELS, b);
-		int end = (j + 1) * STEP;
-		if (end < WIN) continue;
-		run_stock(stock, mel + (end - WIN) * MELS, a);
-		for (int k = 0; k < EMB; k++) {
-			double d = fabs((double)a[k] - b[k]); if (d > worst) worst = d;
-			if (fabs(a[k]) > scale) scale = fabs(a[k]);
-		}
-		compared++;
-	}
-	printf("\n== phase 1: does streaming reproduce the stock model? ==\n");
-	printf("  compared   %d steps after warm-up: max abs diff %.3g (values up to %.1f)\n", compared, worst, scale);
-	printf("  VERDICT    %s\n", worst <= 1e-3 * (scale > 1 ? scale : 1) ? "pass" : "FAIL");
+	static float ref[STEPS][EMB];
+	for (int j = 9; j < STEPS; j++) run_stock(stock, mel + ((j + 1) * STEP - WIN) * MELS, ref[j]);
 
-	paced("stock embedding", stock, run_stock, mel, seconds);
-	stream_reset();
-	paced("streaming embedding", stream, run_stream, mel, seconds);
+	for (int a = 5; a < argc; a++) {
+		model m; memset(&m, 0, sizeof(m));
+		model_init(&m, open_model(env, argv[a], xnn, &x));
+		double worst = 0; float e[EMB];
+		model_reset(&m);
+		for (int j = 0; j < STEPS; j++) {
+			if (m.n == 0 && j < 9) continue;
+			step(&m, mel + j * STEP * MELS, e);
+			if (j < 9) continue;
+			for (int k = 0; k < EMB; k++) { double d = fabs((double)e[k] - ref[j][k]); if (d > worst) worst = d; }
+		}
+		const char *nm = strrchr(argv[a], '/'); nm = nm ? nm + 1 : argv[a];
+		printf("\n== %s: %d states, max abs diff from stock %.3g ==\n", nm, m.n, worst);
+		model_reset(&m);
+		paced(nm, &m, mel, STEPS, seconds);
+	}
 	return 0;
 }
