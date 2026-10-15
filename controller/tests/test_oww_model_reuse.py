@@ -14,6 +14,7 @@ guards on the shipped source, matching test_wake_watchdog.py's approach.
 
 from pathlib import Path
 
+import _sources
 import em_state
 
 CONTROLLER = Path(__file__).resolve().parents[1]
@@ -21,10 +22,6 @@ CONTROLLER = Path(__file__).resolve().parents[1]
 
 def _controller_src() -> str:
     return (CONTROLLER / "em_controller.py").read_text()
-
-
-def _api_src() -> str:
-    return (CONTROLLER / "em_api.py").read_text()
 
 
 def _listener_src() -> str:
@@ -127,9 +124,7 @@ def test_superseded_listener_stands_down_before_scoring():
 
 def test_delete_device_evicts_the_cached_models():
     # A deleted device must not keep its models for the life of the process.
-    api = _api_src()
-    delete = api.index("async def _delete_device")
-    body = api[delete:api.index("async def ", delete + 1)]
+    body = _sources.def_source("_delete_device")
     assert "em_state.forget_oww_models(" in body, \
         "_delete_device must evict the device's cached OWW models"
 

@@ -130,7 +130,7 @@ def test_credentials_are_issued_only_behind_an_approval():
 
 
 def test_approving_a_device_opens_the_window():
-    assert _calls(_fn(_tree("em_api.py"), "_post_approve"), "approve")
+    assert _calls(_sources.find_def("_post_approve")[1], "approve")
 
 
 def test_secure_link_is_gone():

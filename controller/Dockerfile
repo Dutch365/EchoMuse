@@ -129,6 +129,7 @@ COPY em_ingressauth.py .
 COPY em_routes_activity.py .
 COPY em_routes_auth.py .
 COPY em_routes_config.py .
+COPY em_routes_devices.py .
 COPY em_routes_events.py .
 COPY em_routes_link.py .
 COPY em_routes_oww.py .

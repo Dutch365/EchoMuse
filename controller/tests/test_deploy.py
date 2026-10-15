@@ -1775,8 +1775,7 @@ def test_deleting_a_device_bounces_its_link():
     (`control.go` Run), and a close issued first races that redial against
     the delete — it re-registers into the row being deleted and survives.
     """
-    src = (CONTROLLER / "em_api.py").read_text()
-    fn  = _fn_body(src, "_delete_device")
+    fn  = _sources.def_source("_delete_device")
     # Comments stripped: this one explains the ordering it is pinning, and a
     # test that reads its own explanation as the code can be satisfied by
     # prose alone.
@@ -1806,8 +1805,7 @@ def test_deleting_a_device_drops_its_satellite():
     The BT proxy already had this (`em_ble_proxy.reconcile`); the satellite
     did not.
     """
-    src = (CONTROLLER / "em_api.py").read_text()
-    fn  = _fn_body(src, "_delete_device")
+    fn  = _sources.def_source("_delete_device")
     code = "\n".join(l for l in fn.splitlines() if not l.lstrip().startswith("#"))
 
     assert "em_esphome.device_deleted(device_id)" in code, (
@@ -2655,9 +2653,7 @@ def test_the_wizard_reads_the_device_list_the_way_the_api_returns_it():
         "/api/devices returns an array; reading .devices off it is silently "
         "undefined")
 
-    api = (CONTROLLER / "em_api.py").read_text()
-    handler = api[api.index("async def _get_devices"):]
-    handler = handler[:handler.index("\n@")] if "\n@" in handler else handler[:400]
+    handler = _sources.def_source("_get_devices")
     assert "em_http.ok([" in handler, (
         "this test assumes /api/devices returns a bare list — if that changed, "
         "every caller in dashboard.jsx has to change with it")
