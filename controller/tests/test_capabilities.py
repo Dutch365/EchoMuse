@@ -15,6 +15,7 @@ So the strings are asserted to match across the two languages, the same way
 CONFIG_SECTIONS is mirrored between Python and dashboard.jsx.
 """
 
+import _sources
 import re
 from pathlib import Path
 
@@ -131,8 +132,7 @@ def test_sendspin_is_gated_on_its_capability_and_its_token_stays_private():
     assert "sendspinCapable" in API.read_text()
     jsx = (ROOT / "controller" / "static" / "dashboard.jsx").read_text()
     assert "disabled={!sendspinCapable}" in jsx
-    ctrl = CONTROLLER.read_text()
-    handler = ctrl.split('elif msg_type == "sendspin_token":', 1)[1].split("elif msg_type", 1)[0]
+    handler = _sources.def_source("_on_sendspin_token")
     assert "log." not in handler and "_push_event" not in handler, \
         "the sendspin_token handler must hand the token to its waiter and nothing else"
 

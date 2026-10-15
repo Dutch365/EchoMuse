@@ -2148,7 +2148,9 @@ def test_the_control_plane_advert_message_is_still_handled():
     never to a wrong answer.
     """
     src = (CONTROLLER / "em_controller.py").read_text()
-    assert 'msg_type == "ble_adverts"' in src, (
+    table = src[src.index("CONTROL_HANDLERS = {"):]
+    table = table[:table.index("}")]
+    assert '"ble_adverts":' in table, (
         "the control-plane ble_adverts message must stay handled for firmware "
         "that cannot use the data plane"
     )
