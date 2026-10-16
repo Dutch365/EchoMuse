@@ -79,6 +79,28 @@ def consume_accept(device_id: str) -> bool:
     return gen is not None and _gen.get(device_id) == gen
 
 
+def accepted(device_id: str) -> bool:
+    """True when this wake's checker returned an explicit accept.
+
+    Does not consume the mark. The speech gate still takes it once, later.
+    """
+    gen = _accept_gen.get(device_id)
+    return gen is not None and _gen.get(device_id) == gen
+
+
+# The check `begin` started for a device, so a later decision can wait for
+# the explicit accept without starting a second POST.
+_inflight: dict[str, asyncio.Task] = {}
+
+
+def inflight(device_id: str) -> asyncio.Task | None:
+    """The check still running for this device, or None."""
+    task = _inflight.get(device_id)
+    if task is None or task.done():
+        return None
+    return task
+
+
 def bind_turn(device, is_wakeword: bool) -> str:
     """Clear a stale near-miss mark. A non-wake turn also drops the accept.
 
@@ -238,6 +260,7 @@ def begin(*, device_id: str, score, rms, pcm: bytes, streaming: bool | None,
         cfg, device_id=device_id, score=score, rms=rms, pcm=pcm, post=post,
         gen=gen))
     task.em_device_id = device_id  # type: ignore[attr-defined]
+    _inflight[device_id] = task
     return task
 
 

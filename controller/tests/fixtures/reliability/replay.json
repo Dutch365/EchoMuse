@@ -1,0 +1,46 @@
+{
+  "note": "Reconstructed from the 2026-10-16 feasibility numbers. The overnight claim logs were not in the tree. Levels are the published ones: kitchen about -12 dBFS, a far Dot about -28 dBFS and 8 dB quieter, a bedroom false wake about -50 dBFS, verifier about 0.99 on a real wake and 0.11 at 09:49, and the losing Dot's own turn about 4 s after the win.",
+  "1039": {
+    "at": "10:39:21",
+    "claims": [
+      {"device": "kitchen", "heard": 0.0, "level": -12.0, "floor_db": -40.0, "score": 0.82},
+      {"device": "living", "heard": 0.022, "level": -20.0, "floor_db": -46.0, "score": 0.71}
+    ],
+    "loudness_winner": "kitchen",
+    "later": {"device": "living", "at_s": 4.0, "score": 0.4, "accept": false}
+  },
+  "0930": {
+    "at": "09:30",
+    "claims": [
+      {"device": "kitchen", "heard": 0.0, "level": -14.0, "floor_db": -42.0, "score": 0.8},
+      {"device": "dining", "heard": 0.021, "level": -22.0, "floor_db": -48.0, "score": 0.77}
+    ],
+    "loudness_winner": "kitchen"
+  },
+  "0949": {
+    "at": "09:49",
+    "device": "bedroom",
+    "level": -50.0,
+    "verifier": 0.11,
+    "media_state": "playing",
+    "speech_gate_open": false
+  },
+  "1108": {
+    "at": "11:08",
+    "explicit_accept": true,
+    "early_snr_db": 3.0,
+    "base_no_speech_s": 1.5,
+    "adaptive": false,
+    "max_listen_s": 15.0
+  },
+  "1137": {
+    "at": "11:37",
+    "explicit_accept": true,
+    "early_snr_db": 3.0,
+    "base_no_speech_s": 1.5,
+    "adaptive": true,
+    "adaptive_no_speech_s": 3.0,
+    "max_listen_s": 15.0
+  },
+  "synthetic_dbfs": [-12, -28, -50]
+}

@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.26.4
+
+Voice-reliability switches, all of them shadow, log-only, or off. The loudness winner, the cooldown of a losing Dot, the external-audio decision, and the no-speech window stay as they are until an option is changed. No firmware change and no schema change.
+
+The published image pin is still upstream 2.26.1. Install with `tools/make_dev_addon.sh --keep-slug`, as for 2.26.3.
+
+### Added
+
+- `arb_score_mode` (shadow). A composite of energy, SNR against the wake's noise floor, wake score, and arrival delay is logged as `arb_shadow_winner` beside the loudness winner, with agree or disagree. live uses the composite. off skips it. The 80 ms early exit and the 250 ms hold are unchanged.
+- `loser_cooldown_mode` (log), `loser_cooldown_s` (7, range 5–10), `loser_override_wake` (0.95). After a win, a losing Dot's claim inside the window is logged as `would_suppress`. The turn still runs. live drops the claim. A score at or above 0.95 whose checker returned accept is left alone.
+- `external_audio_gate` (log), `room_media_players` (empty), `external_audio_faint_dbfs` (-40). When the mapped player is playing, the wake is at or under -40 dBFS, and the speech gate never opens, the no-speech line gains `external_audio would_drop`. The Home Assistant read waits 200 ms. A timeout or an error does not gate.
+- `adaptive_endpoint` (off), `adaptive_no_speech_ms` (3000), `adaptive_vad_step` (1). On, an explicit checker accept with early SNR under 6 dB extends the no-speech window up to that many milliseconds, capped by the Dot's max listen, and lowers the speech-gate score by one 0.05 step.
+- Every wake log line includes `room_oww` and the score, for per-room threshold tuning.
+
 ## 2.26.3
 
 Speech-gate near-miss, an optional event-loop stall dump, a shorter arbitration hold when only one Echo claims, and database writes that finish on shutdown. No firmware change and no schema change.
