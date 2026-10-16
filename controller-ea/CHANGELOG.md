@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.26.5
+
+A didn't-catch-that tone left speaking set. Every later wake was closed, the ring went green, and no turn started.
+
+The published image pin is still upstream 2.26.1. Install with `tools/make_dev_addon.sh --keep-slug`, as for 2.26.4. `no_reply_cue` still defaults to on.
+
+### Fixed
+
+- The no-reply tone clears speaking when playback ends, when it errors, and after 5 seconds if the send has not finished.
+- A speaking flag still set after 30 seconds is cleared, and the log says so.
+
 ## 2.26.4
 
 Voice-reliability switches, all of them shadow, log-only, or off. The loudness winner, the cooldown of a losing Dot, the external-audio decision, and the no-speech window stay as they are until an option is changed. No firmware change and no schema change.

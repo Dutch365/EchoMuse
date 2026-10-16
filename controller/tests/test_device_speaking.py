@@ -92,6 +92,24 @@ def test_setting_speaking_pushes_the_transition(pushed):
     assert all(p["device_id"] == "dev1" for p in pushed), pushed
 
 
+def test_speaking_remembers_when_it_started_and_a_repeat_does_not_move_it(pushed):
+    """The 30s watchdog reads speaking_since. A second True must not restart it."""
+    d = _device()
+
+    async def main():
+        await d._set_speaking(True)
+        started = d.speaking_since
+        await d._set_speaking(True)
+        same = d.speaking_since
+        await d._set_speaking(False)
+        return started, same
+
+    started, same = asyncio.run(main())
+    assert isinstance(started, float)
+    assert same == started
+    assert d.speaking_since is None
+
+
 def test_a_repeated_set_does_not_push(pushed):
     """
     Idempotent. The push is a socket write to every open dashboard tab, and

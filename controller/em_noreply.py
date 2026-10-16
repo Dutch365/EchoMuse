@@ -13,9 +13,11 @@ when the tone actually plays. The Echo plays the tone through the speaker
 path it already has.
 """
 
+import asyncio
 import logging
 import os
 import re
+import time
 
 import numpy as np
 
@@ -39,6 +41,15 @@ DEFAULT_WAKE_SCORE = 0.85
 # A transcript shorter than this is a fragment. Both have to hold.
 DEFAULT_MIN_WORDS = 2
 DEFAULT_MIN_CHARS = 8
+
+# stream_speaker sets speaking and returns when the bytes are written. The
+# reply path clears the flag from playback_stats; this tone does not go
+# through that path. Five seconds is longer than the tone and shorter than
+# a turn someone is waiting on. Thirty seconds is the backstop for any
+# other path that sets the flag and never reaches its clear: while it is
+# set, a later wake is closed and no turn starts.
+CUE_TIMEOUT_S = 5.0
+SPEAKING_STUCK_S = 30.0
 
 # Turn fields a later check can set. Only an actual True counts; a missing
 # field, 1, and the string "true" stay silent. `address_hook` is the same
@@ -252,12 +263,63 @@ def stamp(device, turn_record):
     return outcome
 
 
+def _stuck(devices, now, limit):
+    """Devices whose speaking flag has been set for at least `limit` seconds."""
+    found = []
+    for device in devices:
+        since = getattr(device, "speaking_since", None)
+        if not getattr(device, "speaking", False):
+            continue
+        if isinstance(since, bool) or not isinstance(since, (int, float)):
+            continue
+        age = now - since
+        if age >= limit:
+            found.append((device, age))
+    return found
+
+
+async def _clear_speaking(device):
+    """Clear speaking even when the dashboard push fails or this task is cancelled."""
+    clear = getattr(device, "_set_speaking", None)
+    try:
+        if clear is not None:
+            await asyncio.shield(clear(False))
+            return
+    except BaseException:
+        pass
+    device.speaking = False
+    if hasattr(device, "speaking_since"):
+        device.speaking_since = None
+
+
+async def clear_stuck_speaking(devices, now=None, limit=SPEAKING_STUCK_S):
+    """Clear a speaking flag that has outlived any real playback.
+
+    The private listener closes a wake while this flag is set, and that
+    close is the whole record: no turn, no error. The cue clears itself.
+    This is the backstop for every other path, called once a second from
+    the event-loop lag monitor.
+    """
+    if now is None:
+        now = time.monotonic()
+    for device, age in _stuck(devices, now, limit):
+        log.warning(
+            f"[{getattr(device, 'device_id', '?')}] speaking stuck for "
+            f"{age:.0f}s — clearing"
+        )
+        await _clear_speaking(device)
+
+
 async def play(device):
     """Play the tone for the failure just recorded, then forget it.
 
     Clearing the reason here means a later turn-end cannot replay a stale
     cue. A barge owns the speaker; the tone stays off. A miss with no
     recorded request stays off, and its phrase is not logged.
+
+    stream_speaker sets speaking and does not clear it. Leaving the flag
+    set closes every later wake. It is cleared when the tone returns, when
+    the tone raises, and when the send is still going after CUE_TIMEOUT_S.
     """
     reason = getattr(device, "last_fail_reason", None) or ""
     real = getattr(device, "last_real_request", False)
@@ -271,6 +333,16 @@ async def play(device):
     phrase = PHRASE[kind]
     log.info(f"[{device.device_id}] {phrase} ({reason})")
     try:
-        await device.stream_speaker(cue_pcm(kind))
+        await asyncio.wait_for(
+            device.stream_speaker(cue_pcm(kind)),
+            timeout=CUE_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        log.warning(
+            f"[{device.device_id}] no-reply tone timed out after "
+            f"{CUE_TIMEOUT_S:.0f}s — clearing speaking"
+        )
     except Exception as e:
         log.warning(f"[{device.device_id}] no-reply tone failed: {e}")
+    finally:
+        await _clear_speaking(device)
