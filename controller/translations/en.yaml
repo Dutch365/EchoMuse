@@ -84,10 +84,39 @@ configuration:
       How long the controller waits for Home Assistant to start answering
       before it gives up on the turn, in seconds. Raise it if your
       conversation agent uses tools: such an agent legitimately needs longer
-      than 30 seconds for a real question, and a turn that is given up is
-      silent — no audio and no error, which looks like a deaf Echo. Above
-      120 is not accepted, because the ring stops showing that the Echo is
-      working at 135 seconds.
+      than 30 seconds for a real question. When the wait ends, the Echo
+      plays a short fallback tone. Above 120 is not accepted, because the
+      ring stops showing that the Echo is working at 135 seconds.
+  max_listen_ms:
+    name: Max listen (milliseconds)
+    description: >-
+      How long the Echo keeps listening after speech starts. A noisy room
+      can hold Home Assistant's voice activity detector open; this ends the
+      turn anyway. 7000 is about one command. This is the fleet default. A
+      Dot that overrides Advanced uses its own slider.
+  trail_cutoff_ms:
+    name: Trail cutoff (milliseconds)
+    description: >-
+      How long quiet or low-confidence audio may run before the turn ends.
+      900 matches the speech gate's silence setting. This is the fleet
+      default. A Dot that overrides Advanced uses its own slider.
+  listen_confidence:
+    name: Listen confidence
+    description: >-
+      The speech score that still counts as the person talking, from 0 to 1.
+      Noise that keeps the microphone loud usually scores under 0.35, and
+      the trail cutoff then ends the turn. This is the fleet default. A Dot
+      that overrides Advanced uses its own slider.
+  no_reply_cue:
+    name: Didn't-catch-that tone
+    description: >-
+      Play a short tone when a turn ends with no transcript or no spoken
+      reply. The log records the reason either way. On by default.
+  reply_fallback:
+    name: Reply timeout tone
+    description: >-
+      Play a short tone when Home Assistant does not start answering within
+      the reply wait. On by default.
   wake_verify_url:
     name: Second-stage wake check URL
     description: >-

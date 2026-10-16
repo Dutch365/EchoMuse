@@ -34,6 +34,7 @@ from typing import Optional
 
 import em_config_sections
 import em_recordings
+import em_turnclock
 import em_wake_samples
 
 log = logging.getLogger("echomuse.db")
@@ -130,6 +131,13 @@ DEFAULT_DEVICE_CONFIG = {
     # this closes the DB/UI mismatch. Tune up to 1200 if sentences still
     # get clipped; 600 caused the "must finish quickly" behaviour.
     "vadSilenceMs":     900,
+    # After speech starts, stop at maxListenMs even if HA's VAD stays open
+    # (a TV does that). trailCutoffMs ends a stretch of quiet or of audio
+    # under listenConfidence. Per Dot; add-on options overlay the fleet
+    # values. The device ignores the three keys.
+    "maxListenMs":      7000,
+    "trailCutoffMs":    900,
+    "listenConfidence": 0.35,
     # True: a tap fires "single" on the HA event entity instead of starting a
     # turn. Gives up cancel-by-tap; mute still cancels. Hold is unaffected.
     "buttonSingleTapEvent": False,
@@ -1149,6 +1157,15 @@ MIGRATIONS: list[str] = [
 
     UPDATE system_config SET value = '31' WHERE key = 'schema_version';
     """,
+
+    # v32 — why a turn failed. NULL on a turn that did not fail, and on every
+    # row written before this column existed. A missing reason is unknown,
+    # which a 0 or an empty string would erase.
+    """
+    ALTER TABLE turns ADD COLUMN fail_reason TEXT;
+
+    UPDATE system_config SET value = '32' WHERE key = 'schema_version';
+    """,
 ]
 
 # Post-migration fixups that need Python rather than SQL. Keyed by the schema
@@ -1308,6 +1325,21 @@ def init(path: str = "echomuse.db") -> None:
     _conn.commit()
     _migrate(_conn)
     log.info("Database ready")
+
+
+def close() -> None:
+    """Checkpoint and close the connection. A second call is a no-op."""
+    global _conn
+    with _db_lock:
+        conn = _conn
+        _conn = None
+        if conn is None:
+            return
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.Error:
+            log.warning("[db] checkpoint on close failed", exc_info=True)
+        conn.close()
 
 
 @contextmanager
@@ -1975,19 +2007,19 @@ def get_global_device_config() -> dict:
     """
     row = _q1("SELECT value FROM system_config WHERE key = 'global_device_config'")
     if row is None or not row["value"]:
-        return dict(DEFAULT_DEVICE_CONFIG)
+        return em_turnclock.overlay_fleet(dict(DEFAULT_DEVICE_CONFIG))
     try:
         stored = json.loads(row["value"])
     except (json.JSONDecodeError, TypeError):
         log.warning("[db] Invalid global_device_config JSON — using defaults")
-        return dict(DEFAULT_DEVICE_CONFIG)
+        return em_turnclock.overlay_fleet(dict(DEFAULT_DEVICE_CONFIG))
     if not stored:
-        return dict(DEFAULT_DEVICE_CONFIG)
+        return em_turnclock.overlay_fleet(dict(DEFAULT_DEVICE_CONFIG))
     # Underlay defaults so keys added after the stored config was last
     # saved (e.g. micGainDb) are still pushed with their default value
     # instead of silently falling back to whatever the device binary's
-    # env default happens to be.
-    return {**DEFAULT_DEVICE_CONFIG, **stored}
+    # env default happens to be. The add-on listen options sit on top.
+    return em_turnclock.overlay_fleet({**DEFAULT_DEVICE_CONFIG, **stored})
 
 
 def get_global_device_config_raw() -> dict:
@@ -2501,6 +2533,7 @@ _TURN_COLUMNS = {
     "wake_threshold":   "wake_threshold",
     "noise_floor":      "noise_floor",
     "outcome":          "outcome",
+    "fail_reason":      "fail_reason",
     "stt_text":         "stt_text",
     "total_ms":         "total_ms",
     # -1 = HA's VAD never engaged (schema v22); NULL = row predates the column

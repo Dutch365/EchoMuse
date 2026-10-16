@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.26.2
+
+Listen cap, a reason for every failed turn, a tone when Home Assistant does not answer, and a shutdown that lets the add-on restart. Schema v32 adds `turns.fail_reason` (NULL when the turn did not fail). No firmware change.
+
+The published image pin is still upstream 2.26.1. Install with `tools/make_dev_addon.sh --keep-slug`, as for 2.26.1-dutch365.
+
+### Added
+
+- A listen cap of 7 seconds after speech starts, and a trail cutoff when the audio goes quiet or the speech score stays low. A TV that keeps Home Assistant's detector open ends the turn at this cap. Per Dot in Advanced (`maxListenMs`, `trailCutoffMs`, `listenConfidence`). Add-on options `max_listen_ms` (7000), `trail_cutoff_ms` (900) and `listen_confidence` (0.35) are the fleet default. A Dot that overrides Advanced keeps its own sliders.
+- Every failed turn logs a reason code and stores it on the turn. `no_tts` with an empty transcript is `no_stt`. A short tone plays for no transcript and for no spoken reply (`no_reply_cue`, on). The phrase is in the log: "didn't catch that".
+- When the reply wait (`tts_wait_timeout`, still 30 seconds, ceiling 120) expires, the Echo plays a short fallback tone (`reply_fallback`, on). The log says "no reply from Home Assistant".
+
+### Fixed
+
+- SIGTERM ends the process. The add-on is PID 1, which ignores the default terminate action, so a restart was SIGKILL after the grace period and the next start found the ports busy.
+- A second Bluetooth proxy start is ignored. A failure to bind is logged, and the Echo's control connection stays up.
+
 ## 2.26.1-dutch365
 
 Based on controller 2.26.1. No database migration and no firmware change. Roll back by stopping the local add-on and starting `acc06409_controller` again. Its data directory is copied, not moved.

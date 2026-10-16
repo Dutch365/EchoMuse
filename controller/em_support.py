@@ -83,7 +83,7 @@ _TURN_FIELDS = (
     # HA's 15s cap and reports as an ordinary endpoint. A bundle carrying only
     # the end cannot tell those apart, and #485 had to be read out of a log
     # excerpt for exactly that reason.
-    "noise_floor", "outcome", "total_ms", "vad_start_ms", "vad_end_ms", "stt_ms",
+    "noise_floor", "outcome", "fail_reason", "total_ms", "vad_start_ms", "vad_end_ms", "stt_ms",
     "tts_url_ms", "tts_fetch_ms", "playback_ms", "send_ms", "delivery_ms",
     "eq_ms", "underruns", "min_depth", "prime_wait_ms", "recv_span_ms",
     "max_gap_ms", "bytes_recv",
