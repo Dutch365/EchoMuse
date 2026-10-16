@@ -112,12 +112,28 @@ options:
   # Seconds to wait for Home Assistant's reply to begin before the turn is
   # given up (#805). 30 is not a safety net for a tool-using conversation
   # agent — a question needing a few model round-trips crosses it in ordinary
-  # use, and the abandoned turn is silent: no audio, no error the user can
-  # see. Raise it if yours is one. The ceiling is the thinking ring's own
-  # dead-man (em_scenes.SPIN_TTL, 135s) less a margin: past that the ring
-  # goes idle while the controller is still waiting, which is the same silent
-  # failure from the other side.
+  # use. When the wait ends the Echo plays a short fallback tone
+  # (reply_fallback). Raise the wait if yours needs longer. The ceiling is
+  # the thinking ring's own dead-man (em_scenes.SPIN_TTL, 135s) less a
+  # margin: past that the ring goes idle while the controller is still waiting.
   tts_wait_timeout: 30
+  # Fleet defaults for the listen cap. A Dot that overrides Advanced uses
+  # its own sliders. max_listen_ms is measured after speech starts.
+  max_listen_ms: 7000
+  trail_cutoff_ms: 900
+  listen_confidence: 0.35
+  # A short tone when a failed turn looks like a request from the family.
+  # A clear transcript that names the assistant or follows the action
+  # button, or a wake score at or above cue_wake_score. Chatter, a
+  # television, a low score, and no speech stay silent. The reason code
+  # is logged either way.
+  no_reply_cue: true
+  cue_wake_score: 0.85
+  cue_min_words: 2
+  cue_min_chars: 8
+  cue_address: ""
+  # A short tone when the reply wait above expires.
+  reply_fallback: true
   # Second-stage wake check. Empty disables it: nothing is posted and the
   # wake path does not wait. The URL is the operator's checker (no default
   # host). A streaming wake POSTs about 1.5s of pre-roll plus score, device
@@ -140,6 +156,15 @@ schema:
   log_levels: "str"
   extra_ca_cert: "str?"
   tts_wait_timeout: "int(5,120)"
+  max_listen_ms: "int(2000,20000)"
+  trail_cutoff_ms: "int(200,3000)"
+  listen_confidence: "float(0,1)"
+  no_reply_cue: "bool"
+  cue_wake_score: "float(0,1)"
+  cue_min_words: "int(1,20)"
+  cue_min_chars: "int(1,80)"
+  cue_address: "str?"
+  reply_fallback: "bool"
   wake_verify_url: "str"
   wake_verify_timeout_ms: "int(50,2000)"
   wake_verify_on_error: "list(accept|reject)"

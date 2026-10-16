@@ -84,10 +84,65 @@ configuration:
       How long the controller waits for Home Assistant to start answering
       before it gives up on the turn, in seconds. Raise it if your
       conversation agent uses tools: such an agent legitimately needs longer
-      than 30 seconds for a real question, and a turn that is given up is
-      silent — no audio and no error, which looks like a deaf Echo. Above
-      120 is not accepted, because the ring stops showing that the Echo is
-      working at 135 seconds.
+      than 30 seconds for a real question. When the wait ends, the Echo
+      plays a short fallback tone. Above 120 is not accepted, because the
+      ring stops showing that the Echo is working at 135 seconds.
+  max_listen_ms:
+    name: Max listen (milliseconds)
+    description: >-
+      How long the Echo keeps listening after speech starts. A noisy room
+      can hold Home Assistant's voice activity detector open; this ends the
+      turn anyway. 7000 is about one command. This is the fleet default. A
+      Dot that overrides Advanced uses its own slider.
+  trail_cutoff_ms:
+    name: Trail cutoff (milliseconds)
+    description: >-
+      How long quiet or low-confidence audio may run before the turn ends.
+      900 matches the speech gate's silence setting. This is the fleet
+      default. A Dot that overrides Advanced uses its own slider.
+  listen_confidence:
+    name: Listen confidence
+    description: >-
+      The speech score that still counts as the person talking, from 0 to 1.
+      Noise that keeps the microphone loud usually scores under 0.35, and
+      the trail cutoff then ends the turn. This is the fleet default. A Dot
+      that overrides Advanced uses its own slider.
+  no_reply_cue:
+    name: Didn't-catch-that tone
+    description: >-
+      Play a short tone when a failed turn looks like a request. A clear
+      transcript that names the assistant, speech after the action button,
+      or a high wake score counts. Background chatter, a television, a low
+      score, and no speech stay silent. The reason code is logged either
+      way. On by default.
+  cue_wake_score:
+    name: Wake score for the tone
+    description: >-
+      A wake at or above this score counts as a real request, so the
+      didn't-catch-that tone may play. 0.85 sits above the score that
+      fires the wake word. A missing score stays silent.
+  cue_min_words:
+    name: Minimum words in a request
+    description: >-
+      A transcript can count as clear from this many words. The default
+      is 2. The wake score can still count on its own.
+  cue_min_chars:
+    name: Minimum letters in a request
+    description: >-
+      A transcript can count as clear from this many letters. The default
+      is 8. The wake score can still count on its own.
+  cue_address:
+    name: Extra names for the assistant
+    description: >-
+      Comma-separated phrases. A clear transcript that contains one of
+      them counts as directed at the assistant. The device's own wake
+      word is always included. Empty adds none. A phrase shorter than
+      three letters is ignored.
+  reply_fallback:
+    name: Reply timeout tone
+    description: >-
+      Play a short tone when Home Assistant does not start answering within
+      the reply wait. On by default.
   wake_verify_url:
     name: Second-stage wake check URL
     description: >-

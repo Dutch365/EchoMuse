@@ -13,6 +13,7 @@ import logging
 import em_config_types
 import em_console_pw
 import em_esphome
+import em_turnclock
 import em_oww_sync
 import em_scenes
 import em_shadow
@@ -135,6 +136,7 @@ async def apply_live_config(device_id: str, live, effective: dict) -> None:
                  "listeningAnim": live.led_scene["listening_anim"]})
         except Exception:
             pass  # device offline — next connect re-sends it
+    em_turnclock.apply_listen(live, effective)
 
 
 # The console password record never leaves the controller. Hashing before

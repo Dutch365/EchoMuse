@@ -117,7 +117,10 @@ import em_tap_burst
 import em_esphome as esphome
 import em_ble_proxy
 import em_oww_models
+import em_noreply
 import em_player
+import em_shutdown
+import em_turnclock
 import em_volume
 import em_speechgate
 import em_timers
@@ -1653,6 +1656,7 @@ async def _leds_turn_end(device: Device):
     """
     outcome = device.last_turn_outcome
     device.last_turn_outcome = None
+    await em_noreply.play(device)
     key = _OUTCOME_ANIM.get(outcome or "")
     # Barge-in re-enters a fresh turn immediately and repaints listening —
     # a cue there would flash for a few frames and read as a glitch.
@@ -5290,10 +5294,9 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
             config.get("buttonSingleTapEvent", False)
         )
         device.button_multi_tap_ms = int(config.get("buttonMultiTapMs", 0))
-        # See em_device_config.apply_live_config: consumed only on the controller-detected
-        # wake path, mirrored in both places because that is the rule
-        # test_config_mirrors.py enforces and the reason it exists.
+        # Mirrored in apply_live_config (test_config_mirrors.py).
         device.wake_sound = bool(config.get("wakeSound", False))
+        em_turnclock.apply_listen(device, config)
         # Resolved against the capability — see em_shadow.effective_mode for
         # why "on" against firmware that cannot trigger must become shadow
         # rather than being honoured.
@@ -6110,6 +6113,8 @@ async def event_loop_lag_monitor(interval: float = 1.0,
 
 
 async def main():
+    stop = asyncio.Event()
+    em_shutdown.install(asyncio.get_running_loop(), stop)
     log.info(f"EchoMuse Controller {CONTROLLER_VERSION}")
     db.init(DB_PATH)
     auth.maybe_generate_bootstrap_token()
@@ -6197,19 +6202,12 @@ async def main():
             await em_ble_proxy.start_ble_proxy_servers(SERVER_HOST)
 
             log.info("EchoMuse Controller ready — waiting for devices")
-            await asyncio.Future()
+            await stop.wait()
 
     finally:
-        await em_ble_proxy.stop_ble_proxy_servers()
-        await esphome.stop_esphome_servers()
-        release_task.cancel()
-        session_prune_task.cancel()
-        loop_lag_task.cancel()
-        mdns_task.cancel()
-        await azc.async_unregister_service(info)
-        await azc.async_close()
-        await runner.cleanup()
-        log.info("EchoMuse Controller stopped")
+        await em_shutdown.finish(
+            (release_task, session_prune_task, loop_lag_task, mdns_task),
+            azc, info, runner)
 
 
 if __name__ == "__main__":
