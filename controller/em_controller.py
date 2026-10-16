@@ -1333,6 +1333,9 @@ class Device:
         if self.speaking == value:
             return
         self.speaking = value
+        # Monotonic start of this True. The 30s watchdog reads it; a second
+        # True does not refresh it, because that return is above.
+        self.speaking_since = time.monotonic() if value else None
         if value:
             # Mutually exclusive phases. Leaving `thinking` set meant the tile
             # FELL BACK to Thinking the moment speaking cleared, instead of
@@ -6094,6 +6097,7 @@ async def event_loop_lag_monitor(interval: float = 1.0,
     next_cpu = 0.0
     while True:
         lag_ms = await em_stallwatch.measure(loop, interval)
+        await em_noreply.clear_stuck_speaking(list(em_state.devices.values()))
         if lag_ms > em_state.loop_lag_peak_ms:
             em_state.loop_lag_peak_ms = lag_ms
         # Piggyback the controller's CPU sampling on this ticker rather than

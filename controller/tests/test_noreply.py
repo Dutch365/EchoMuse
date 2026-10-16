@@ -1,7 +1,10 @@
 """A failed turn carries a reason. The miss tone plays for a real request."""
 
+import asyncio
 import logging
 import os
+import time
+from pathlib import Path
 
 import pytest
 
@@ -342,3 +345,153 @@ def test_a_successful_turn_stores_a_null_reason(tmp_path):
         assert rows[1]["fail_reason"] == "no_tts"
     finally:
         em_db.close()
+
+
+class _Cue:
+    """A device the tone can play to. speaking starts set, as stream_speaker does."""
+
+    def __init__(self):
+        self.device_id = "G090"
+        self.barge_detected = False
+        self.last_fail_reason = "no_tts"
+        self.last_real_request = True
+        self.speaking = True
+        self.speaking_since = 0.0
+        self.pcm = None
+        self.cleared = 0
+
+    async def stream_speaker(self, pcm):
+        self.pcm = pcm
+        self.speaking = True
+
+    async def _set_speaking(self, value):
+        self.speaking = value
+        self.speaking_since = None if not value else self.speaking_since
+        if not value:
+            self.cleared += 1
+
+
+def test_a_cue_that_finishes_clears_speaking():
+    dev = _Cue()
+    asyncio.run(nr.play(dev))
+    assert dev.pcm
+    assert dev.speaking is False
+    assert dev.speaking_since is None
+    assert dev.cleared == 1
+
+
+def test_a_cue_that_errors_clears_speaking(caplog):
+    dev = _Cue()
+
+    async def broken(pcm):
+        dev.pcm = pcm
+        raise RuntimeError("speaker down")
+
+    dev.stream_speaker = broken
+    caplog.set_level(logging.WARNING, logger="echomuse")
+    asyncio.run(nr.play(dev))
+    assert dev.speaking is False
+    assert dev.cleared == 1
+    assert "no-reply tone failed" in caplog.text
+    assert "speaker down" in caplog.text
+
+
+def test_a_cue_that_hangs_clears_speaking_at_five_seconds(caplog, monkeypatch):
+    monkeypatch.setattr(nr, "CUE_TIMEOUT_S", 0.05)
+    dev = _Cue()
+
+    async def hang(pcm):
+        dev.pcm = pcm
+        await asyncio.Event().wait()
+
+    dev.stream_speaker = hang
+    caplog.set_level(logging.WARNING, logger="echomuse")
+    asyncio.run(nr.play(dev))
+    assert dev.speaking is False
+    assert dev.cleared == 1
+    assert "timed out" in caplog.text
+    assert "clearing speaking" in caplog.text
+
+
+def test_the_cue_limits_are_five_and_thirty_seconds():
+    assert nr.CUE_TIMEOUT_S == 5.0
+    assert nr.SPEAKING_STUCK_S == 30.0
+
+
+def test_a_silent_miss_does_not_clear_speaking_a_reply_still_owns():
+    dev = _Cue()
+    dev.last_real_request = False
+    dev.last_fail_reason = "no_stt"
+    asyncio.run(nr.play(dev))
+    assert dev.pcm is None
+    assert dev.speaking is True
+    assert dev.cleared == 0
+
+
+def test_a_failed_speaking_clear_still_drops_the_flag():
+    dev = _Cue()
+
+    async def boom(value):
+        raise RuntimeError("dashboard gone")
+
+    dev._set_speaking = boom
+    asyncio.run(nr.play(dev))
+    assert dev.speaking is False
+    assert dev.speaking_since is None
+
+
+def test_the_speaking_watchdog_clears_a_flag_stuck_for_thirty_seconds(caplog):
+    fresh = _Cue()
+    fresh.speaking_since = 0.0
+    caplog.set_level(logging.WARNING, logger="echomuse")
+    asyncio.run(nr.clear_stuck_speaking([fresh], now=29.9))
+    assert fresh.speaking is True
+    assert fresh.cleared == 0
+
+    stuck = _Cue()
+    stuck.speaking_since = 0.0
+    quiet = _Cue()
+    quiet.speaking = False
+    quiet.speaking_since = 0.0
+    unstamped = _Cue()
+    unstamped.speaking_since = None
+    flagged = _Cue()
+    flagged.speaking_since = True
+    asyncio.run(nr.clear_stuck_speaking(
+        [stuck, quiet, unstamped, flagged], now=30.0))
+    assert stuck.speaking is False
+    assert stuck.speaking_since is None
+    assert stuck.cleared == 1
+    assert quiet.speaking is False
+    assert quiet.cleared == 0
+    assert unstamped.speaking is True
+    assert flagged.speaking is True
+    assert "speaking stuck for 30s" in caplog.text
+    assert "G090" in caplog.text
+    assert "clearing" in caplog.text
+
+
+def test_the_watchdog_uses_the_clock_when_no_time_is_given():
+    dev = _Cue()
+    dev.speaking_since = time.monotonic() - 31
+    asyncio.run(nr.clear_stuck_speaking([dev]))
+    assert dev.speaking is False
+
+
+def test_a_device_with_no_setter_is_still_cleared():
+    class Bare:
+        device_id = "G091"
+        speaking = True
+        speaking_since = 0.0
+
+    dev = Bare()
+    asyncio.run(nr.clear_stuck_speaking([dev], now=31.0))
+    assert dev.speaking is False
+    assert dev.speaking_since is None
+
+
+def test_the_lag_monitor_runs_the_speaking_watchdog():
+    src = Path(__file__).resolve().parents[1].joinpath("em_controller.py").read_text()
+    start = src.index("async def event_loop_lag_monitor")
+    end = src.index("\nasync def ", start + 1)
+    assert "clear_stuck_speaking" in src[start:end]
