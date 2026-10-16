@@ -1815,7 +1815,7 @@ class EchoMuseSatellite(SatelliteServerProtocol):
         # which ducked-music residue passes. None = model unavailable, and
         # the turn streams ungated exactly as before.
         vad = em_speechgate.new_turn()
-        gate = em_speechgate.SpeechGate() if vad is not None else None
+        gate = em_speechgate.gate_for(device, vad)
 
         def _is_speech(chunk: bytes) -> bool:
             samples = np.frombuffer(chunk, dtype=np.int16)
@@ -1968,6 +1968,8 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                     prob = await asyncio.get_running_loop().run_in_executor(
                         None, vad.prob, payload)
                     frames = gate.push(payload, prob)
+                    if gate.near_miss_sent:
+                        device.gate_near_miss = True
                     if gate.open and not speech_seen:
                         speech_seen = True
                         log.info(f"[{self._log_name}] Speech gate {gate.summary()}, p={prob:.2f}")

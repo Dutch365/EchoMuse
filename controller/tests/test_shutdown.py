@@ -1,15 +1,26 @@
 """SIGTERM has to end the process, because the add-on is PID 1."""
 
 import asyncio
+import logging
 import signal
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
+import pytest
+
 import em_db
+import em_dbwriter
 import em_shutdown
 
 CONTROLLER = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def _writer_left_open():
+    yield
+    em_dbwriter.unseal()
 
 
 def test_sigterm_ends_a_waiting_loop():
@@ -138,3 +149,54 @@ def test_close_checkpoints_and_a_second_close_is_quiet(tmp_path):
         conn.close()
     assert version == "32"
     assert "fail_reason" in cols
+
+
+def test_finish_drains_the_writer_before_the_database_closes():
+    src = (CONTROLLER / "em_shutdown.py").read_text()
+    finish = src[src.index("async def finish"):]
+    assert finish.index("await stop_voice()") < finish.index("em_dbwriter.drain(")
+    assert finish.index("em_dbwriter.drain(") < finish.index("em_dbwriter.seal(")
+    assert finish.index("em_dbwriter.seal(") < finish.index("close_db()")
+
+
+def test_queued_writes_land_and_later_ones_drop_once(tmp_path, caplog):
+    device_id = "G090DRAIN0000001"
+    gate = threading.Event()
+    started = threading.Event()
+
+    def block():
+        started.set()
+        gate.wait(5)
+
+    em_db.init(str(tmp_path / "em.db"))
+    try:
+        em_db.ensure_device_token(device_id)
+        em_dbwriter.submit(block)
+        assert started.wait(2)
+        em_dbwriter.submit(
+            em_db.log_device, device_id, "info", "controller",
+            "queued-during-shutdown")
+        assert em_dbwriter.drain(0.05) is False
+        gate.set()
+        assert em_dbwriter.drain(3) is True
+        messages = [row["message"] for row in em_db.get_device_logs(device_id)]
+        assert "queued-during-shutdown" in messages
+        em_db.close()
+        em_dbwriter.seal()
+        caplog.set_level(logging.WARNING, logger="echomuse.dbwriter")
+        caplog.clear()
+        em_dbwriter.submit(
+            em_db.log_device, device_id, "info", "controller", "after-close")
+        em_dbwriter.submit(
+            em_db.log_device, device_id, "info", "controller", "after-close-2")
+        assert "db.init() has not been called" not in caplog.text
+        dropped = [r for r in caplog.records if "dropping queued writes" in r.message]
+        assert len(dropped) == 1
+    finally:
+        gate.set()
+        em_dbwriter.unseal()
+        try:
+            em_dbwriter.drain(2)
+        except Exception:
+            pass
+        em_db.close()

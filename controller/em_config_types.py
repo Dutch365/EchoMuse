@@ -48,6 +48,7 @@ KINDS: dict[str, str] = {
     "maxListenMs": INT,
     "trailCutoffMs": INT,
     "listenConfidence": FLOAT,
+    "speechGateThreshold": FLOAT,
     "owwThreshold": FLOAT,
     "owwModel": STR,
     "owwOnDevice": STR,

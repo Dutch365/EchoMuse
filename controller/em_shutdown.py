@@ -9,6 +9,8 @@ bound. A handler registered on the loop runs for PID 1.
 import logging
 import signal
 
+import em_dbwriter
+
 log = logging.getLogger("echomuse")
 
 
@@ -60,5 +62,10 @@ async def finish(tasks, azc, info, runner, deps=None) -> None:
     except Exception:
         log.warning("mDNS shutdown failed", exc_info=True)
     await runner.cleanup()
+    # Voice has stopped. Drain what teardown queued, then refuse anything
+    # that arrives after the connection is gone — one warning, not an error
+    # per write ("db.init() has not been called").
+    em_dbwriter.drain()
+    em_dbwriter.seal()
     close_db()
     log.info("EchoMuse Controller stopped")

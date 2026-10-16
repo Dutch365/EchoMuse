@@ -33,6 +33,7 @@ from contextlib import contextmanager
 from typing import Optional
 
 import em_config_sections
+import em_dbwriter
 import em_recordings
 import em_turnclock
 import em_wake_samples
@@ -131,13 +132,12 @@ DEFAULT_DEVICE_CONFIG = {
     # this closes the DB/UI mismatch. Tune up to 1200 if sentences still
     # get clipped; 600 caused the "must finish quickly" behaviour.
     "vadSilenceMs":     900,
-    # After speech starts, stop at maxListenMs even if HA's VAD stays open
-    # (a TV does that). trailCutoffMs ends a stretch of quiet or of audio
-    # under listenConfidence. Per Dot; add-on options overlay the fleet
-    # values. The device ignores the three keys.
+    # Listen cap, trail cutoff, and the Silero speech-gate score. Per Dot;
+    # add-on options overlay the fleet. The device ignores these keys.
     "maxListenMs":      7000,
     "trailCutoffMs":    900,
     "listenConfidence": 0.35,
+    "speechGateThreshold": 0.5,
     # True: a tap fires "single" on the HA event entity instead of starting a
     # turn. Gives up cancel-by-tap; mute still cancels. Hold is unaffected.
     "buttonSingleTapEvent": False,
@@ -1308,14 +1308,9 @@ _db_lock = threading.Lock()
 
 
 def init(path: str = "echomuse.db") -> None:
-    """
-    Initialise the database. Must be called once at startup before any
-    other db function is used.
-
-    Opens a single persistent connection, enables WAL mode and foreign
-    key enforcement, then runs any pending migrations.
-    """
+    """Open the database, enable WAL and foreign keys, run pending migrations."""
     global _db_path, _conn
+    em_dbwriter.unseal()
     _db_path = path
     log.info(f"Opening database: {os.path.abspath(path)}")
     _conn = sqlite3.connect(path, check_same_thread=False)

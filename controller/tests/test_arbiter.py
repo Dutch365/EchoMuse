@@ -444,6 +444,104 @@ def test_a_held_contest_gives_the_louder_room_the_turn():
     assert run(main()) == ("kitchen", "kitchen")
 
 
+def test_a_single_claim_returns_at_the_early_mark():
+    async def main():
+        arb = WakeArbiter()
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        won = await arb.contest("office", WINDOW, hold_s=0.25, early_s=0.08)
+        return won, loop.time() - t0
+    won, elapsed = run(main())
+    assert won == "office"
+    assert 0.05 < elapsed < 0.15
+
+
+def test_two_claims_a_frame_apart_still_go_to_the_louder_dot():
+    async def main():
+        arb = WakeArbiter()
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        first = asyncio.create_task(arb.contest(
+            "quiet", WINDOW, hold_s=0.25, early_s=0.08, level=-70))
+        await asyncio.sleep(0.025)
+        second = asyncio.create_task(arb.contest(
+            "loud", WINDOW, hold_s=0.25, early_s=0.08, level=-40))
+        won, also = await first, await second
+        return won, also, loop.time() - t0
+    won, also, elapsed = run(main())
+    assert (won, also) == ("loud", "loud")
+    assert elapsed > 0.2
+
+
+def test_a_second_claim_keeps_the_window_open_for_a_louder_one():
+    """A claim inside the early mark holds the old window, so 150ms still wins."""
+    async def main():
+        arb = WakeArbiter()
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        first = asyncio.create_task(arb.contest(
+            "first", 0.4, hold_s=0.25, early_s=0.08, level=-60))
+        await asyncio.sleep(0.02)
+        mid = asyncio.create_task(arb.contest(
+            "mid", 0.4, hold_s=0.25, early_s=0.08, level=-50))
+        await asyncio.sleep(0.13)
+        late = asyncio.create_task(arb.contest(
+            "loud", 0.4, hold_s=0.25, early_s=0.08, level=-30))
+        results = (await first, await mid, await late)
+        return results, loop.time() - t0
+    results, elapsed = run(main())
+    assert results == ("loud", "loud", "loud")
+    assert elapsed > 0.2
+
+
+def test_a_lone_claim_after_the_early_grant_cedes():
+    async def main():
+        arb = WakeArbiter()
+        first = await arb.contest(
+            "office", WINDOW, hold_s=0.25, early_s=0.08, level=-50)
+        late = await arb.contest(
+            "loud", WINDOW, hold_s=0.25, early_s=0.08, level=-20)
+        return first, late
+    assert run(main()) == ("office", "office")
+
+
+def test_early_exit_never_waits_longer_than_the_hold():
+    async def main():
+        arb = WakeArbiter()
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        await arb.contest("office", WINDOW, hold_s=0.05, early_s=0.5)
+        return loop.time() - t0
+    elapsed = run(main())
+    assert 0.03 < elapsed < 0.12
+
+
+def test_early_zero_waits_out_the_hold():
+    async def main():
+        arb = WakeArbiter()
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        await arb.contest("office", WINDOW, hold_s=0.1, early_s=0)
+        return loop.time() - t0
+    elapsed = run(main())
+    assert 0.08 < elapsed < 0.18
+
+
+def test_arbitration_early_defaults_to_80ms_and_clamps(monkeypatch):
+    import em_listen
+    monkeypatch.delenv("EM_ARBITRATION_EARLY_MS", raising=False)
+    assert em_listen.arbitration_early() == 0.08
+    assert em_listen.arbitration_early({}) == 0.08
+    assert em_listen.arbitration_early({"EM_ARBITRATION_EARLY_MS": ""}) == 0.08
+    assert em_listen.arbitration_early({"EM_ARBITRATION_EARLY_MS": "0"}) == 0.0
+    assert em_listen.arbitration_early({"EM_ARBITRATION_EARLY_MS": "40"}) == 0.04
+    assert em_listen.arbitration_early({"EM_ARBITRATION_EARLY_MS": "999"}) == 0.25
+    assert em_listen.arbitration_early({"EM_ARBITRATION_EARLY_MS": "nope"}) == 0.08
+    import _sources
+    body = _sources.def_source("em_controller._claim_wake")
+    assert "early_s=em_listen.arbitration_early()" in body
+
+
 def test_a_held_contest_without_levels_still_goes_to_the_first_to_hear():
     async def main():
         arb = WakeArbiter()

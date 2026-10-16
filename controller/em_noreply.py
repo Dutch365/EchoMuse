@@ -180,6 +180,10 @@ def real_request(turn):
     """
     if not isinstance(turn, dict):
         return False
+    # Audio we sent only because the verifier accepted and Silero was close.
+    # An empty transcript is the end of that turn: no tone, no phrase.
+    if turn.get("gate_near_miss") is True and not _normalise(turn.get("stt_text")):
+        return False
     if _hook_accepts(turn):
         return True
     if _high_wake(turn.get("wake_score")):
@@ -234,6 +238,9 @@ def stamp(device, turn_record):
     outcome = turn_record.get("outcome") or ""
     reason = reason_code(outcome, turn_record.get("stt_text") or "")
     turn_record["fail_reason"] = reason or None
+    if getattr(device, "gate_near_miss", False):
+        turn_record["gate_near_miss"] = True
+    device.gate_near_miss = False
     device.last_fail_reason = reason or None
     device.last_real_request = real_request(turn_record)
     if reason:

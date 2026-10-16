@@ -9459,7 +9459,7 @@ const CONFIG_SECTIONS = {
   "wakeword": ["owwModel", "owwThreshold", "owwSpeexNs", "bargeInEnabled", "bargeInThreshold", "wakeArbitrationMs", "owwOnDevice", "wakeSound", "wakeSoundLevel", "wakeClipCapture", "wakeClipMinScore"],
   "microphones": ["adcMicpga", "adcDigitalGain", "micGainDb", "beamformingEnabled", "beamAngle", "wakeMic", "aecEnabled", "aecDelayMs", "aecTailMs", "aecRefSource", "nsAsr", "saveUtterances"],
   "ring": ["ledScene", "ledListenColor", "ledThinkColor", "remoteVolumeArc", "meterAttack", "meterDecay", "meterFloor", "meterGamma", "meterRef", "meterCurve"],
-  "advanced": ["agcEnabled", "vadThreshold", "vadSpeechMs", "vadSilenceMs", "maxListenMs", "trailCutoffMs", "listenConfidence", "buttonSingleTapEvent", "buttonMultiTapMs", "consolePassword", "consoleTimeoutMin", "controllerEndpoints"],
+  "advanced": ["agcEnabled", "vadThreshold", "vadSpeechMs", "vadSilenceMs", "maxListenMs", "trailCutoffMs", "listenConfidence", "speechGateThreshold", "buttonSingleTapEvent", "buttonMultiTapMs", "consolePassword", "consoleTimeoutMin", "controllerEndpoints"],
   "bluetooth": ["bleProxyEnabled", "bleProxyConnections"],
   "sendspin": ["sendspinEnabled", "sendspinUnpaired"]
 };
@@ -10326,6 +10326,7 @@ function DeviceConfigForm({ config, onChange, disabled, sections, onScopeChange,
           <Slider label="Max listen" sub="after speech starts, even if the room stays noisy" value={config.maxListenMs ?? 7000} min={2000} max={20000} step={500} unit="ms" onChange={v => set('maxListenMs', v)}/>
           <Slider label="Trail cutoff" sub="quiet or low-confidence audio before the turn ends" value={config.trailCutoffMs ?? 900} min={200} max={3000} step={100} unit="ms" onChange={v => set('trailCutoffMs', v)}/>
           <Slider label="Listen confidence" sub="Silero score that still counts as speech" value={config.listenConfidence ?? 0.35} min={0.05} max={0.9} step={0.05} onChange={v => set('listenConfidence', v)}/>
+          <Slider label="Speech gate score" sub="Silero score that releases audio to Home Assistant" value={config.speechGateThreshold ?? 0.5} min={0.2} max={0.8} step={0.05} onChange={v => set('speechGateThreshold', v)}/>
         </div>
       </Stage>
 

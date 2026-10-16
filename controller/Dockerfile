@@ -193,6 +193,8 @@ COPY em_recordings.py .
 COPY em_turnclock.py .
 COPY em_noreply.py .
 COPY em_shutdown.py .
+COPY em_stallwatch.py .
+COPY em_linklog.py .
 COPY em_firmware.py .
 COPY em_announce.py .
 COPY em_runbarrier.py .

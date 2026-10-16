@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.26.3
+
+Speech-gate near-miss, an optional event-loop stall dump, a shorter arbitration hold when only one Echo claims, and database writes that finish on shutdown. No firmware change and no schema change.
+
+The published image pin is still upstream 2.26.1. Install with `tools/make_dev_addon.sh --keep-slug`, as for 2.26.2.
+
+### Added
+
+- Speech gate score is configurable. Add-on option `speech_gate_threshold` (0.5, range 0.2–0.8), env `EM_SPEECH_GATE_THRESHOLD`, and per-Dot `speechGateThreshold` in Advanced. 0.5 is the score the gate has always used.
+- When a second-stage wake check returns `{"accept": true}` and the gate's best score reaches 0.25 but stays under the threshold, the held audio is sent to Home Assistant. The log line is `gate near-miss sent` plus that score. An empty transcript ends quietly: the reason code is still logged, and the didn't-catch-that tone stays off. A reject, a timeout, and a checker that is off keep today's hold.
+- Event-loop stall watchdog, off by default (`loop_watchdog`, env `EM_LOOP_WATCHDOG`). On a stall over 1 second it dumps the blocking stack and names the turn or upload that was running. The 250ms stall warning is unchanged.
+- Link-stall lines now include the Dot's Wi-Fi RSSI and power-save state. Power-save reads `unknown` until a firmware build reports `wifiPowerSave`.
+- Arbitration grants a lone claim after `arbitration_early_ms` (80). A second claim inside that window keeps the 250ms hold, so a louder Echo still in the old window wins. 0 waits out the whole hold. The wake check still runs during the hold.
+
+### Fixed
+
+- Shutdown drains queued database writes (3s) after the voice servers stop and before the database closes. Writes that arrive after the close are dropped with one warning.
+
 ## 2.26.2
 
 Listen cap, a reason for every failed turn, a tone when Home Assistant does not answer, and a shutdown that lets the add-on restart. Schema v32 adds `turns.fail_reason` (NULL when the turn did not fail). No firmware change.

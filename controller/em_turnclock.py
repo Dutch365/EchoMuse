@@ -23,6 +23,8 @@ captured that audio perfectly and TCP was holding it.
 
 import os
 
+import em_speechgate
+
 # Seconds of quiet, measured from the first real audio frame, before an
 # accidental wake is closed quietly. Matches the device's own noSpeechTimeout.
 NO_SPEECH_TIMEOUT = 5.0
@@ -300,6 +302,7 @@ def apply_listen(device, config):
     device.max_listen_s, device.trail_cutoff_s, device.listen_confidence = (
         listen_limits(config)
     )
+    em_speechgate.apply(device, config)
 
 
 def _env_get(env, name):
@@ -328,4 +331,4 @@ def overlay_fleet(cfg, env=None):
     conf = _env_get(env, "EM_LISTEN_CONFIDENCE")
     if conf is not None:
         out["listenConfidence"] = _clamp_float(conf, LISTEN_CONFIDENCE, 0.0, 1.0)
-    return out
+    return em_speechgate.overlay(out, env)

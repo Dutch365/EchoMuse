@@ -57,6 +57,38 @@ class Settings:
 
 _cached: Settings | None = None
 
+# Explicit {"accept": true} only. A disabled checker, a timeout, and the
+# on-error accept all return True from finish() and must not unlock the
+# speech-gate near-miss — that would send sub-threshold audio on every
+# install that has no checker. The generation is bumped when a wake is
+# abandoned or a non-wake turn starts, so a stale accept cannot leak.
+_gen: dict[str, int] = {}
+_accept_gen: dict[str, int] = {}
+
+
+def _bump(device_id: str) -> int:
+    n = _gen.get(device_id, 0) + 1
+    _gen[device_id] = n
+    _accept_gen.pop(device_id, None)
+    return n
+
+
+def consume_accept(device_id: str) -> bool:
+    """True once, when this device's current wake was an explicit accept."""
+    gen = _accept_gen.pop(device_id, None)
+    return gen is not None and _gen.get(device_id) == gen
+
+
+def bind_turn(device, is_wakeword: bool) -> str:
+    """Clear a stale near-miss mark. A non-wake turn also drops the accept.
+
+    Returns "" so a log line can call it without changing the text.
+    """
+    device.gate_near_miss = False
+    if not is_wakeword:
+        _bump(getattr(device, "device_id", "") or "")
+    return ""
+
 
 def parse_settings(env: Mapping[str, str] | None = None) -> Settings:
     env = {} if env is None else env
@@ -119,8 +151,13 @@ async def post_json(url: str, payload: dict, timeout_s: float) -> tuple[int, dic
             return resp.status, body if isinstance(body, dict) else None
 
 
+def _note_explicit(device_id: str, gen: int | None) -> None:
+    if gen is None or _gen.get(device_id) == gen:
+        _accept_gen[device_id] = _gen.get(device_id, 0) if gen is None else gen
+
+
 async def check(cfg: Settings, *, device_id: str, score, rms, pcm: bytes,
-                post=None) -> bool:
+                post=None, gen: int | None = None) -> bool:
     """POST one clip. Empty URL accepts without a request."""
     if not cfg.enabled:
         return True
@@ -147,6 +184,8 @@ async def check(cfg: Settings, *, device_id: str, score, rms, pcm: bytes,
     accepted = verdict(body, on_error=cfg.on_error)
     if not isinstance(body, dict) or not isinstance(body.get("accept"), bool):
         return _fallback(cfg, device_id, "bad response")
+    if body.get("accept") is True:
+        _note_explicit(device_id, gen)
     log.info("wake verify %s — %s", device_id, "accept" if accepted else "reject")
     return accepted
 
@@ -190,16 +229,26 @@ def begin(*, device_id: str, score, rms, pcm: bytes, streaming: bool | None,
     brought its own pre-roll. Without that clip the wake is not sent.
     """
     cfg = settings() if cfg is None else cfg
+    gen = _bump(device_id)
     if not cfg.enabled:
         return None
     if classify(has_session, streaming) != "stream" and not (device_clip and pcm):
         return None
-    return asyncio.create_task(check(
-        cfg, device_id=device_id, score=score, rms=rms, pcm=pcm, post=post))
+    task = asyncio.create_task(check(
+        cfg, device_id=device_id, score=score, rms=rms, pcm=pcm, post=post,
+        gen=gen))
+    task.em_device_id = device_id  # type: ignore[attr-defined]
+    return task
 
 
 def cancel(task: asyncio.Task | None) -> None:
-    if task is not None and not task.done():
+    """Abandon a check. An accept it already recorded cannot outlive this."""
+    if task is None:
+        return
+    device_id = getattr(task, "em_device_id", None)
+    if device_id:
+        _bump(device_id)
+    if not task.done():
         task.cancel()
 
 
