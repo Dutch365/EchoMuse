@@ -268,6 +268,17 @@ def test_malformed_wake_is_dropped_not_coerced():
     assert p.peek() is False
 
 
+def test_a_device_clip_is_kept_with_the_wake_and_replaced_with_it():
+    p = pending()
+    p.offer(0.7, 0.5, age_ms=0, at_now=0.0, preroll=b"\x01\x00")
+    p.offer(0.95, 0.5, age_ms=0, at_now=1.0, preroll=b"\x02\x00")
+    wake, _ = p.take(at_now=1.0)
+    assert wake["preroll"] == b"\x02\x00"
+    p.offer(0.4, 0.5, age_ms=0, at_now=2.0)
+    wake, _ = p.take(at_now=2.0)
+    assert wake["preroll"] is None
+
+
 def test_missing_threshold_does_not_cost_the_wake():
     """The threshold is recorded against the turn, not used to decide
     anything — losing it must not lose the user their wake."""

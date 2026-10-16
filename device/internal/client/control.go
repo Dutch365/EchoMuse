@@ -1292,11 +1292,15 @@ func capabilities() []string {
 	// "sendspin": this firmware can be a Sendspin player (internal/sendspin),
 	// switched by sendspinEnabled. Whether it is running, and paired, is the
 	// sendspin status, for the aec_hw_ref reason.
+	//
+	// "wake_preroll": this firmware keeps ~1.5s of wake-stream audio and can
+	// attach it to oww_wake. It does so only against a controller announcing
+	// the same feature. Older firmware simply has no field.
 	caps := []string{"mic", "speaker", "leds", "led_anim", "buttons",
 		"oww_shadow", "oww_trigger", "button_hold", "audio_mix",
 		"aec_hw_ref", "oww_local_only", "output_chain", "wake_cue", "volume_cue", "remote_volume_arc",
 		"response_level", "wake_mic", "pairing",
-		"wake_word_off", "sendspin", "ble_connect"}
+		"wake_word_off", "sendspin", "ble_connect", "wake_preroll"}
 	if als.Present() {
 		caps = append(caps, "ambient_light")
 	}
@@ -1468,8 +1472,21 @@ func (c *ControlClient) SendOwwShadowCross(score float32, ageMs int64) {
 //
 // level is how loud the wake word was here (wakelevel.go), nil if its frames
 // had already left the ring; the controller logs it with the capture time.
+//
+// preRoll is the mic audio ending at the crossing (preroll.go), raw S16_LE.
+// Nil omits the field. The caller passes it only when the controller
+// announced FeatureWakePreroll: an older controller ignores unknown fields,
+// but the clip is tens of kilobytes on the control plane and is not sent
+// unasked.
 func (c *ControlClient) SendOwwWake(score, threshold float32, capturedAt time.Time,
-	session uint32, floor float64, barge bool, level *WakeLevel) {
+	session uint32, floor float64, barge bool, level *WakeLevel, preRoll []byte) {
+	_ = c.writeJSON(owwWakeMessage(score, threshold, capturedAt, session, floor, barge, level, preRoll))
+}
+
+// owwWakeMessage is SendOwwWake's body, split out so the field rules can be
+// tested without a socket.
+func owwWakeMessage(score, threshold float32, capturedAt time.Time,
+	session uint32, floor float64, barge bool, level *WakeLevel, preRoll []byte) map[string]interface{} {
 	msg := map[string]interface{}{
 		"type":         "oww_wake",
 		"score":        score,
@@ -1486,7 +1503,10 @@ func (c *ControlClient) SendOwwWake(score, threshold float32, capturedAt time.Ti
 		msg["level"] = level.Level
 		msg["peak"] = level.Peak
 	}
-	_ = c.writeJSON(msg)
+	if len(preRoll) > 0 {
+		msg["preRoll"] = preRoll
+	}
+	return msg
 }
 
 // SendListenState reports what the device is actually doing with its wake
@@ -1552,6 +1572,15 @@ const FeatureBleConnect = "ble_connect"
 // wake-stream frames are arriving — a device that went quiet on it would be
 // deaf.
 const FeatureListenSession = "listen_session"
+
+// FeatureWakePreroll is announced by a controller that reads preRoll on
+// oww_wake: about 1.5s of mic audio ending at the crossing, for a second
+// check of an on-device wake. Without it the device sends the wake exactly
+// as before. The clip is added to the message, not moved off another path,
+// so an older controller that did receive it would ignore the field — the
+// gate is so the bytes are not written onto a control plane that will drop
+// them.
+const FeatureWakePreroll = "wake_preroll"
 
 // FeatureOutputChain is announced by a controller that sends this device's
 // audio UNPROCESSED and leaves EQ, bass guard and limiter to the device.

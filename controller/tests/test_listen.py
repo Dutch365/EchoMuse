@@ -141,7 +141,8 @@ def test_parse_wake():
                        "ageMs": 120, "floor": 0.002, "barge": True}, 5.0)
     assert ev == {"session": 3, "score": 0.8, "threshold": 0.5, "age_ms": 120,
                   "floor": 0.002, "barge": True, "arrived": 5.0,
-                  "captured_mono": None, "level": None, "peak": None}
+                  "captured_mono": None, "level": None, "peak": None,
+                  "preroll": None}
 
 
 def test_parse_wake_carries_the_wake_level():
@@ -159,6 +160,32 @@ def test_parse_wake_refuses_what_it_cannot_act_on():
 def test_parse_wake_tolerates_missing_optionals():
     ev = L.parse_wake({"session": 2, "score": 0.9}, 1.0)
     assert ev["floor"] is None and ev["threshold"] is None and ev["age_ms"] == 0
+    assert ev["preroll"] is None
+
+
+def test_parse_wake_carries_a_device_clip_and_drops_a_bad_one():
+    import base64
+    pcm = b"\x01\x00" * 80
+    ev = L.parse_wake({
+        "session": 4, "score": 0.7,
+        "preRoll": base64.b64encode(pcm).decode("ascii"),
+    }, 2.0)
+    assert ev["preroll"] == pcm
+    # Too long, odd, or not base64: the wake still parses, with no clip.
+    huge = base64.b64encode(b"\x00\x00" * (L.PREROLL_MAX_BYTES // 2 + 1)).decode("ascii")
+    assert L.parse_wake({"session": 4, "score": 0.7, "preRoll": huge}, 2.0)["preroll"] is None
+    assert L.parse_wake({"session": 4, "score": 0.7, "preRoll": "@@@@"}, 2.0)["preroll"] is None
+    assert L.decode_preroll(b"\x01\x00\x02") is None
+    assert L.decode_preroll(None) is None
+    assert L.decode_preroll(b"\x01\x00") == b"\x01\x00"
+
+
+def test_preroll_length_is_milliseconds_of_16khz_s16le():
+    # 16 samples is one millisecond. 19 wake frames (1.52s) is what the Dot sends.
+    assert L.preroll_ms(None) == 0
+    assert L.preroll_ms(b"") == 0
+    assert L.preroll_ms(b"\x00\x00" * 16) == 1
+    assert L.preroll_ms(b"\x00\x00" * (19 * 1280)) == 1520
 
 
 def test_frame_is_bytes_to_every_other_reader():

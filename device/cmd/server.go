@@ -1494,7 +1494,15 @@ func onWakeCrossing(cc *client.ControlClient, dc *client.DataClient,
 	if ok {
 		lv = &client.WakeLevel{Level: level, Peak: peak}
 	}
-	cc.SendOwwWake(score, crossed, at, session, dc.ListenFloor(), barge, lv)
+	// The clip rides the wake. It is not a stream, and it is omitted unless
+	// this controller said it will read it (FeatureWakePreroll). The session
+	// opened above still starts after the crossing: private listening is
+	// unchanged.
+	var pre []byte
+	if cc.HasFeature(client.FeatureWakePreroll) {
+		pre = dc.WakePreroll(at)
+	}
+	cc.SendOwwWake(score, crossed, at, session, dc.ListenFloor(), barge, lv, pre)
 }
 
 // syncListenState resolves what the device does with its wake stream and

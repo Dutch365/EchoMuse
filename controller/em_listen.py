@@ -25,6 +25,7 @@ Three pieces:
 
 from __future__ import annotations
 
+import base64
 import struct
 from collections import deque
 from dataclasses import dataclass, field
@@ -33,6 +34,15 @@ from dataclasses import dataclass, field
 # only when it sees this: an older controller acts on a device wake only when
 # wake-stream frames are arriving, so a device that went quiet on it is deaf.
 FEATURE = "listen_session"
+
+# Controller feature and device capability for the on-device wake clip.
+# Same string both ways, as output_chain is: the device sends preRoll only
+# when the ack carries it, and announces that it can.
+WAKE_PREROLL = "wake_preroll"
+
+# 2s of 16 kHz mono s16le. The device sends 1.52s; anything longer is not a
+# clip this protocol defines, and is ignored rather than buffered.
+PREROLL_MAX_BYTES = 2 * 16000 * 2
 
 # The device's capability: it CAN listen privately. Whether it IS comes from
 # its listen_state report.
@@ -496,4 +506,37 @@ def parse_wake(msg: dict, arrived: float) -> dict | None:
         "peak":      _num("peak"),
         "barge":     bool(msg.get("barge")),
         "arrived":   arrived,
+        # PCM the Echo scored, or None. Older firmware omits the field.
+        "preroll":   decode_preroll(msg.get("preRoll")),
     }
+
+
+def preroll_ms(pcm: bytes | None) -> int:
+    """Length of a 16 kHz mono s16le clip, in milliseconds. Absent is 0."""
+    if not pcm:
+        return 0
+    return (len(pcm) // 2) * 1000 // 16000
+
+
+def decode_preroll(value) -> bytes | None:
+    """Raw 16 kHz mono s16le from an oww_wake ``preRoll``, or None.
+
+    Absent, empty, and unusable are the same answer: there is no clip, and
+    the wake itself still stands. A clip that is not even-length PCM, or
+    longer than :data:`PREROLL_MAX_BYTES`, is unusable — truncating it would
+    hand the checker a word cut in a place the device did not choose.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, (bytes, bytearray)):
+        raw = bytes(value)
+    elif isinstance(value, str):
+        try:
+            raw = base64.b64decode(value, validate=True)
+        except Exception:
+            return None
+    else:
+        return None
+    if len(raw) < 2 or len(raw) % 2 or len(raw) > PREROLL_MAX_BYTES:
+        return None
+    return raw

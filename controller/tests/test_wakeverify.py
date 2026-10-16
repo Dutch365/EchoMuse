@@ -7,6 +7,7 @@ import wave
 
 import aiohttp
 
+import _sources
 import em_wakeverify
 from em_wakeverify import Settings
 
@@ -206,6 +207,45 @@ def test_cancel_and_a_failed_task():
     assert run(main()) is True
 
 
+def test_a_private_wake_with_a_device_clip_is_checked():
+    pcm = b"\x00\x10" * 160
+    seen = {}
+
+    async def post(url, payload, timeout_s):
+        seen["pcm_b64"] = payload["audio_wav_b64"]
+        seen["rms"] = payload["rms"]
+        return 200, {"accept": False}
+
+    async def main():
+        skipped = em_wakeverify.begin(
+            device_id="kitchen", score=0.9, rms=0.01, pcm=b"",
+            streaming=False, has_session=True, device_clip=True, cfg=_cfg(), post=post)
+        off = em_wakeverify.begin(
+            device_id="kitchen", score=0.9, rms=0.01, pcm=pcm,
+            streaming=False, has_session=True, device_clip=True,
+            cfg=Settings(), post=post)
+        task = em_wakeverify.begin(
+            device_id="kitchen", score=0.91, rms=em_wakeverify.pcm_rms(pcm), pcm=pcm,
+            streaming=False, has_session=True, device_clip=True, cfg=_cfg(), post=post)
+        assert skipped is None and off is None and task is not None
+        return await em_wakeverify.finish(task)
+
+    assert run(main()) is False
+    assert seen["pcm_b64"]
+    # A constant sample has a known RMS. 0x1000 / 32768.
+    assert abs(em_wakeverify.pcm_rms(b"\x00\x10" * 4) - (0x1000 / 32768)) < 1e-9
+    assert em_wakeverify.pcm_rms(b"") == 0.0
+
+
+def test_device_clip_replaces_the_controller_ring_only_for_a_device_wake():
+    ring = b"\x01\x00"
+    clip = b"\x02\x00" * 8
+    assert em_wakeverify.pcm_for_check(ring, {"preroll": clip}, "device") == clip
+    assert em_wakeverify.pcm_for_check(ring, {"preroll": clip}, "controller") == ring
+    assert em_wakeverify.pcm_for_check(ring, {"preroll": b""}, "device") == ring
+    assert em_wakeverify.pcm_for_check(ring, None, "device") == ring
+
+
 def test_begin_posts_a_streaming_wake():
     async def post(url, payload, timeout_s):
         assert payload["device_id"] == "kitchen"
@@ -219,3 +259,33 @@ def test_begin_posts_a_streaming_wake():
         return await em_wakeverify.finish(task)
 
     assert run(main()) is False
+
+
+def test_a_private_wake_is_checked_before_the_ack():
+    """listen_ack is what plays the wake sound. A reject must not beep.
+
+    The check starts before arbitration and is awaited before the ack. A
+    cede or a missing HA connection returns first, and the in-flight check
+    is cancelled on the way out.
+    """
+    body = _sources.def_source("em_controller._private_wake_turn")
+    code = _sources.code_only(body)
+    begin = code.index("em_wakeverify.begin(")
+    ack = code.index("await device.listen_ack(session)")
+    finish = code.index("await em_wakeverify.finish(verify)")
+    assert begin < code.index("_claim_wake(")
+    assert finish < ack
+    assert "device_clip=" in code
+    assert code.index("em_wakeverify.cancel(verify)") > ack
+
+
+def test_every_on_device_wake_logs_its_preroll_length():
+    """An info line, on every oww_wake, with the clip length in milliseconds.
+
+    0 is a wake that brought no clip. The line is how a running Dot shows
+    the buffer arrived, with the checker left off.
+    """
+    src = _sources.def_source("em_controller._on_oww_wake")
+    line = next(l for l in src.splitlines() if "wake pre-roll" in l)
+    assert "log.info" in line
+    assert "preroll_ms" in line
