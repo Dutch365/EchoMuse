@@ -124,7 +124,7 @@ import em_turnclock
 import em_volume
 import em_speechgate
 import em_stallwatch
-import em_linklog
+import em_linklog, em_reliability
 import em_timers
 import em_loglevel
 
@@ -3266,26 +3266,23 @@ async def _claim_wake(device: "Device", heard_at: float | None,
                       by: str = "controller",
                       over_playback: bool = False,
                       score: float | None = None) -> str:
-    """Claim the utterance for `device`; returns the winner's id.
-
-    `level` is the wake's (level, peak) in dBFS. Its level is what the arbiter
-    compares across Echoes (em_arbiter.pick), and it is logged with its
-    capture time so contested wakes can be paired later; see em_wakelevel.
-    `over_playback` says this Echo heard the wake over its own speaker, which
-    the reading then contains, so the contest is decided on time.
-    """
+    """Claim the utterance for `device`. Loudness still picks; see em_arbiter."""
     hold = _arbitration_hold()
     floor_db = None
     if device.noise_floor:
         floor_db = round(
             em_wakelevel.dbfs(device.noise_floor) - float(device.mic_gain_db), 1)
-    won_by = await em_state.wake_arbiter.contest(
-        device.device_id, device.wake_arb_ms / 1000.0,
-        heard_at=heard_at, slack_s=_arbitration_slack(), hold_s=hold,
-        level=level[0] if level is not None else None,
-        gains=device.adc_gains, over_playback=over_playback,
-        score=score, floor_db=floor_db, early_s=em_listen.arbitration_early(),
-    )
+    level_db = level[0] if level is not None else None
+    if await em_reliability.should_drop(device.device_id, score):
+        won_by = em_reliability.held_winner(device.device_id)
+    else:
+        won_by = await em_state.wake_arbiter.contest(
+            device.device_id, device.wake_arb_ms / 1000.0,
+            heard_at=heard_at, slack_s=_arbitration_slack(), hold_s=hold,
+            level=level_db, gains=device.adc_gains, over_playback=over_playback,
+            score=score, floor_db=floor_db, early_s=em_listen.arbitration_early(),
+        )
+        em_reliability.note_claim(device, won_by, level_db, floor_db)
     now = asyncio.get_event_loop().time()
     if hold > 0:
         ago = (now - heard_at) * 1000.0 if heard_at is not None else 0.0
@@ -3357,7 +3354,7 @@ async def _private_wake_turn(device: Device, ev: dict) -> None:
     log.info(
         f"[{device.device_id}] Wake word detected (source=device, private, "
         f"session={session}, score={score:.3f}, threshold={threshold:.3f}, "
-        f"floor={device.noise_floor:.4f})"
+        f"floor={device.noise_floor:.4f}, room_oww={score:.3f})"
     )
     em_dbwriter.submit(db.log_device, device.device_id, "info", "device",
                   f"Wake word detected (score={score:.3f}, device)")
@@ -3917,7 +3914,7 @@ async def _stream_listen(device: Device):
                         f"[{device.device_id}] Wake word detected "
                         f"(source={source}, score={score:.3f}, "
                         f"threshold={eff_threshold:.3f}, "
-                        f"rms={rms:.4f}, floor={device.noise_floor:.4f}"
+                        f"rms={rms:.4f}, floor={device.noise_floor:.4f}, room_oww={score:.3f}"
                         + (f", scored {(loop.time() - arrived) * 1000:.0f}ms "
                            f"after arrival, {(arrived - heard) * 1000:.0f}ms "
                            f"in transit" if source == "controller" else "")

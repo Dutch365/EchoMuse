@@ -111,12 +111,21 @@ by 11dB or more, and keeps time as the answer whenever it does not.
 
 Pure asyncio, no imports from the rest of the controller — unit-tested
 in tests/test_arbiter.py.
+
+`score_hook`, when set, sees the claims and the loudness winner after
+`pick()` and may name a different winner. None leaves `pick()` as the
+only decision. The default install logs a shadow score and returns None.
 """
 
 from __future__ import annotations
 
 import asyncio
 from typing import NamedTuple
+
+# (entries, loudness_winner) -> device id, or None to keep the loudness winner.
+# Assigned by em_reliability. This module does not import that one.
+score_hook = None
+
 
 class Claim(NamedTuple):
     heard: float
@@ -194,6 +203,8 @@ class WakeArbiter:
         self._contest: tuple[float, list, asyncio.Future] | None = None
         # Why the last contest went the way it did, for the caller's log.
         self.last_why: str = ""
+        # Claims the last contest decided among. Empty until one is held.
+        self.last_entries: list = []
 
     def claim(self, device_id: str, window_s: float,
               heard_at: float | None = None, slack_s: float = 0.0) -> str:
@@ -284,7 +295,16 @@ class WakeArbiter:
                 await asyncio.sleep(max(0.0, heard + hold_s - loop.time()))
         finally:
             won, self.last_why = pick(entries)
+            self.last_entries = list(entries)
             winner = won.device_id
+            hook = score_hook
+            if hook is not None:
+                try:
+                    alt = hook(self.last_entries, winner)
+                except Exception:
+                    alt = None
+                if alt:
+                    winner = alt
             if self._contest is not None and self._contest[2] is decided:
                 self._contest = None
             self._winner, self._heard_at = winner, won.heard

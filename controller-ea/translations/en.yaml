@@ -129,6 +129,65 @@ configuration:
       grants a lone claim then. A second claim inside that window keeps
       the full 250 millisecond hold, so a louder Echo still wins. 0 waits
       out the whole hold. The wait is never longer than that hold.
+  arb_score_mode:
+    name: Arbitration score
+    description: >-
+      shadow logs a composite score (loudness, noise floor, wake score,
+      arrival) beside the loudness winner. off leaves that log out. live
+      gives the turn to the composite winner. The early exit and the hold
+      stay as they are. shadow is the default.
+  loser_cooldown_mode:
+    name: Loser cooldown
+    description: >-
+      After a win, a losing Dot's claim inside the cooldown is logged as
+      would_suppress. The turn still runs. live drops that claim. A wake
+      score at or above the override, accepted by the second-stage checker,
+      is left alone. log is the default.
+  loser_cooldown_s:
+    name: Loser cooldown (seconds)
+    description: >-
+      How long a losing Dot stays in the cooldown. 7 seconds. The range
+      is 5 to 10.
+  loser_override_wake:
+    name: Cooldown override score
+    description: >-
+      A wake at or above this score whose checker returned accept skips
+      the cooldown. 0.95.
+  external_audio_gate:
+    name: External audio gate
+    description: >-
+      log writes external_audio would_drop when the room's player is
+      playing, the wake is at or under the faint level, and the speech
+      gate never opens. live writes external_audio drop. The Home
+      Assistant read waits 200 ms. A timeout or an error does not gate.
+      log is the default.
+  room_media_players:
+    name: Room media players
+    description: >-
+      JSON map of Dot id to a Home Assistant media_player entity id.
+      Empty maps nothing, and the external-audio read is not made.
+  external_audio_faint_dbfs:
+    name: Faint wake level (dBFS)
+    description: >-
+      A wake at or under this level can meet the external-audio rule.
+      -40. Louder wakes are left alone.
+  adaptive_endpoint:
+    name: Adaptive endpoint
+    description: >-
+      Off by default. On, an explicit checker accept with early SNR under
+      6 dB extends the no-speech window and lowers the speech-gate score
+      by one step. The window stays within the Dot's max listen.
+  adaptive_no_speech_ms:
+    name: Adaptive no-speech (milliseconds)
+    description: >-
+      The no-speech window used when adaptive endpoint is on and its
+      conditions are met. 3000. It does not shorten a longer window, and
+      it does not pass the Dot's max listen.
+  adaptive_vad_step:
+    name: Adaptive speech-gate steps
+    description: >-
+      How many 0.05 steps to lower the speech-gate score when adaptive
+      endpoint applies. 1. The score stays inside 0.2 to 0.8.
   no_reply_cue:
     name: Didn't-catch-that tone
     description: >-

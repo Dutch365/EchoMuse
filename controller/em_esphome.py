@@ -94,7 +94,7 @@ import em_player
 import em_tasks
 import em_timers
 import em_noreply
-import em_turnclock
+import em_turnclock, em_reliability
 import em_volume
 import em_wakeword
 import em_output_mute
@@ -1814,6 +1814,7 @@ class EchoMuseSatellite(SatelliteServerProtocol):
         # open, speech_seen comes from the gate rather than the RMS check,
         # which ducked-music residue passes. None = model unavailable, and
         # the turn streams ungated exactly as before.
+        em_reliability.arm_turn(device)
         vad = em_speechgate.new_turn()
         gate = em_speechgate.gate_for(device, vad)
 
@@ -1862,11 +1863,14 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                 give_up, why = em_turnclock.no_speech_verdict(
                     now=time.monotonic(), turn_start=turn_start,
                     listening_since=listening_since, speech_seen=speech_seen,
+                    no_speech_timeout=em_reliability.no_speech_limit(
+                        device, em_turnclock.NO_SPEECH_TIMEOUT),
                 )
                 if give_up:
                     log.info(
                         f"[{self._log_name}] {why} — closing HA pipeline "
                         f"quietly (controller-side no-speech timeout)"
+                        f"{em_reliability.external_clause(device)}"
                     )
                     self._send_one(api_pb2.VoiceAssistantAudio(data=b"", end=True))
                     self._no_speech_timeout = True

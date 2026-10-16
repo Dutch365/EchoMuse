@@ -202,6 +202,15 @@ def apply(device, config) -> None:
 
 
 def threshold_for(device) -> float:
+    """The gate score for this turn.
+
+    `adaptive_gate_threshold`, when set, is one step lower after an explicit
+    verifier accept on a quiet wake. Unset, the stored speech-gate score is
+    what the turn has always used.
+    """
+    override = getattr(device, "adaptive_gate_threshold", None)
+    if override is not None:
+        return clamp_threshold(override)
     return clamp_threshold(getattr(device, "speech_gate_threshold", THRESHOLD))
 
 
