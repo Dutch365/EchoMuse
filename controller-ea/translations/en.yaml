@@ -107,6 +107,28 @@ configuration:
       Noise that keeps the microphone loud usually scores under 0.35, and
       the trail cutoff then ends the turn. This is the fleet default. A Dot
       that overrides Advanced uses its own slider.
+  speech_gate_threshold:
+    name: Speech gate score
+    description: >-
+      The Silero score that releases a turn's audio to Home Assistant,
+      from 0.2 to 0.8. 0.5 is the score the gate has always used. A Dot
+      that overrides Advanced uses its own slider. When a second-stage
+      wake check accepts the wake and the best score reaches 0.25 but
+      stays under this, the held audio is sent anyway. An empty
+      transcript then ends quietly.
+  loop_watchdog:
+    name: Event-loop stall watchdog
+    description: >-
+      Off by default. When on, a stall longer than one second dumps the
+      blocking stack and names the turn or upload that was running. The
+      250 millisecond stall warning is unchanged.
+  arbitration_early_ms:
+    name: Arbitration early exit (milliseconds)
+    description: >-
+      How long to wait for a second Echo after the first wake claim. 80
+      grants a lone claim then. A second claim inside that window keeps
+      the full 250 millisecond hold, so a louder Echo still wins. 0 waits
+      out the whole hold. The wait is never longer than that hold.
   no_reply_cue:
     name: Didn't-catch-that tone
     description: >-

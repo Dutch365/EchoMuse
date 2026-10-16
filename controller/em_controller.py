@@ -123,6 +123,8 @@ import em_shutdown
 import em_turnclock
 import em_volume
 import em_speechgate
+import em_stallwatch
+import em_linklog
 import em_timers
 import em_loglevel
 
@@ -2717,7 +2719,7 @@ async def _run_voice_locked(device: Device, trigger_label: str = "unknown",
             if is_wakeword and _ringing_devices():
                 await _dismiss_by_speech(device)
                 return
-            log.info(f"[{device.device_id}] Voice turn starting (esphome mode)")
+            log.info(f"[{device.device_id}] Voice turn starting (esphome mode){em_wakeverify.bind_turn(device, is_wakeword)}")
             device.listening = True
             await leds_listening(device)
             await _push_device_state(device)
@@ -3282,7 +3284,7 @@ async def _claim_wake(device: "Device", heard_at: float | None,
         heard_at=heard_at, slack_s=_arbitration_slack(), hold_s=hold,
         level=level[0] if level is not None else None,
         gains=device.adc_gains, over_playback=over_playback,
-        score=score, floor_db=floor_db,
+        score=score, floor_db=floor_db, early_s=em_listen.arbitration_early(),
     )
     now = asyncio.get_event_loop().time()
     if hold > 0:
@@ -4543,7 +4545,7 @@ async def _on_stats(device: Device, msg: dict) -> None:
         "memTotalMb":    msg.get("memTotalMb"),
         "storageUsedMb": msg.get("storageUsedMb"),
         "storageTotalMb":msg.get("storageTotalMb"),
-        "wifiRssi":      msg.get("wifiRssi"),
+        "wifiRssi":      msg.get("wifiRssi"), "wifiPowerSave": msg.get("wifiPowerSave"),
         "wifiSsid":      msg.get("wifiSsid"),
         # v7 link telemetry (firmware >= v2.9.6). This dict
         # is an explicit allowlist, so any new device stat
@@ -5047,7 +5049,7 @@ async def _on_pong(device: Device, msg: dict) -> None:
                 _line = device.rtt_log.record(
                     _rtt, _busy, loop.time())
                 if _line:
-                    log.info(_line)
+                    log.info(_line + em_linklog.suffix(device))
 
 
 CONTROL_HANDLERS = {
@@ -6094,9 +6096,7 @@ async def event_loop_lag_monitor(interval: float = 1.0,
     loop = asyncio.get_event_loop()
     next_cpu = 0.0
     while True:
-        t0 = loop.time()
-        await asyncio.sleep(interval)
-        lag_ms = (loop.time() - t0 - interval) * 1000
+        lag_ms = await em_stallwatch.measure(loop, interval)
         if lag_ms > em_state.loop_lag_peak_ms:
             em_state.loop_lag_peak_ms = lag_ms
         # Piggyback the controller's CPU sampling on this ticker rather than

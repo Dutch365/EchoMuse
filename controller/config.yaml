@@ -3,7 +3,7 @@ name: "EchoMuse"
 # derives from the controller-v* tag (controller-v2.18.0 -> 2.18.0). Bump
 # both together: Supervisor pulls `image:version`, so a version with no
 # matching tag on GHCR fails to install.
-version: "2.26.2"
+version: "2.26.3"
 # Pull the published multi-arch image rather than building on the user's
 # machine. Without this Supervisor builds from this directory's Dockerfile,
 # which downloads a few hundred MB on whatever the user runs Home Assistant
@@ -108,6 +108,19 @@ options:
   max_listen_ms: 7000
   trail_cutoff_ms: 900
   listen_confidence: 0.35
+  # Silero score that releases a turn's audio to Home Assistant. 0.5 is
+  # the score the gate has always used. A Dot that overrides Advanced
+  # uses speechGateThreshold. A wake the second-stage checker accepts,
+  # whose best score reaches 0.25 and stays under this, is sent anyway.
+  speech_gate_threshold: 0.5
+  # Off: the 250ms stall warning is unchanged, and no stack is dumped.
+  # On: a stall over 1s dumps the blocking stack and names the turn or
+  # upload that was running.
+  loop_watchdog: false
+  # Milliseconds a lone wake claim waits for a second Echo. 80 grants it
+  # then. A second claim inside that window keeps the 250ms hold, so a
+  # louder Echo still in the old window wins. 0 waits out the whole hold.
+  arbitration_early_ms: 80
   # A short tone when a failed turn looks like a request from the family.
   # A clear transcript that names the assistant or follows the action
   # button, or a wake score at or above cue_wake_score. Chatter, a
@@ -145,6 +158,9 @@ schema:
   max_listen_ms: "int(2000,20000)"
   trail_cutoff_ms: "int(200,3000)"
   listen_confidence: "float(0,1)"
+  speech_gate_threshold: "float(0.2,0.8)"
+  loop_watchdog: "bool"
+  arbitration_early_ms: "int(0,250)"
   no_reply_cue: "bool"
   cue_wake_score: "float(0,1)"
   cue_min_words: "int(1,20)"
