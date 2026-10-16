@@ -23,6 +23,8 @@ def _patch(monkeypatch, serve):
         lambda _i: {"bleProxyEnabled": True, "bleProxyConnections": False},
     )
     monkeypatch.setattr(ble.db, "ensure_ble_proxy_port", lambda _i: 16050)
+    monkeypatch.setattr(ble.db, "get_esphome_mac",
+                        lambda _i: "AA:BB:CC:DD:EE:FF")
 
 
 def test_two_reconciles_bind_once(monkeypatch):
@@ -43,11 +45,15 @@ def test_two_reconciles_bind_once(monkeypatch):
 
     _patch(monkeypatch, serve)
     ble._online.add("G090LF00000000AA")
+
+    async def both():
+        await asyncio.gather(
+            ble.reconcile("G090LF00000000AA"),
+            ble.reconcile("G090LF00000000AA"),
+        )
+
     try:
-        asyncio.run(asyncio.gather(
-            ble.reconcile("G090LF00000000AA"),
-            ble.reconcile("G090LF00000000AA"),
-        ))
+        asyncio.run(both())
         assert binds == [16050]
     finally:
         _reset()
@@ -94,7 +100,7 @@ def test_a_start_already_in_progress_does_not_bind_again(monkeypatch):
     async def race():
         ble._online.add("G090LF00000000CC")
         first = asyncio.create_task(ble.reconcile("G090LF00000000CC"))
-        await started.wait()
+        await asyncio.wait_for(started.wait(), 2)
         proxy = ble._proxies["G090LF00000000CC"]
         await proxy.start("0.0.0.0")
         release.set()

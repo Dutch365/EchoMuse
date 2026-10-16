@@ -466,7 +466,7 @@ async def reconcile(device_id: str) -> None:
             else:
                 await proxy.stop()
     except Exception as e:
-        log.warning(f"[{device_id}] BT proxy reconcile failed: {e}")
+        log.exception(f"[{device_id}] BT proxy reconcile failed: {e}")
 
 
 

@@ -307,7 +307,7 @@ def test_a_quiet_trail_ends_a_turn_ha_already_started():
         trail_cutoff_s = 0.9
     clock = tc.ListenClock()
     clock.mark_started(1.0)
-    end, why = tc.endpoint_verdict(1.9, True, True, clock, Dev())
+    end, why = tc.endpoint_verdict(2.0, True, True, clock, Dev())
     assert end is True
     assert "low confidence" in why
 
@@ -365,6 +365,26 @@ def test_apply_listen_is_on_register_and_on_a_live_push():
     live = (root / "em_device_config.py").read_text()
     assert "em_turnclock.apply_listen(device, config)" in reg
     assert "em_turnclock.apply_listen(live, effective)" in live
+
+
+def test_endpoint_falls_through_when_the_cap_has_not_fired():
+    class Dev:
+        max_listen_s = 7.0
+        trail_cutoff_s = 0.9
+    clock = tc.ListenClock()
+    clock.speech_started_at = 0.0
+    clock.last_confident_at = 2.9
+    clock.first_speech_at = 0.0
+    clock.last_speech_at = 1.5
+    end, why = tc.endpoint_verdict(3.0, True, False, clock, Dev())
+    assert end is True
+    assert "HA VAD" in why
+
+
+def test_a_bad_confidence_keeps_the_default():
+    out = tc.overlay_fleet({"listenConfidence": 0.2},
+                           {"EM_LISTEN_CONFIDENCE": "high"})
+    assert out["listenConfidence"] == tc.LISTEN_CONFIDENCE
 
 
 def test_apply_listen_copies_seconds():

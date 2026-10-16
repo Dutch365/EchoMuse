@@ -92,6 +92,22 @@ def test_stamp_records_the_reason_and_play_speaks_it():
     assert dev.pcm is None
     assert dev.last_fail_reason is None
 
+    dev.barge_detected = False
+    dev.last_fail_reason = "no_speech"
+    asyncio.run(nr.play(dev))
+    assert dev.pcm is None
+
+    def boom(pcm):
+        raise RuntimeError("speaker down")
+
+    async def broken(pcm):
+        boom(pcm)
+
+    dev.stream_speaker = broken
+    dev.last_fail_reason = "no_tts"
+    asyncio.run(nr.play(dev))
+    assert dev.last_fail_reason is None
+
 
 def test_a_successful_turn_stores_a_null_reason(tmp_path):
     em_db.init(str(tmp_path / "em.db"))

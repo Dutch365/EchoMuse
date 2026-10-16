@@ -73,6 +73,54 @@ def test_finish_stops_players_listeners_and_the_database():
     ]
 
 
+def test_the_handler_sets_the_stop_event_for_a_real_or_unknown_signal():
+    stop = asyncio.Event()
+    em_shutdown._on_signal(stop, signal.SIGTERM)
+    assert stop.is_set()
+    other = asyncio.Event()
+    em_shutdown._on_signal(other, 99999)
+    assert other.is_set()
+
+
+def test_install_registers_on_a_running_loop_and_survives_a_refusal():
+    seen = []
+
+    class Loop:
+        def add_signal_handler(self, sig, cb, *args):
+            seen.append(sig)
+            if sig == signal.SIGINT:
+                raise RuntimeError("not the main thread")
+
+    em_shutdown.install(Loop(), asyncio.Event())
+    assert signal.SIGTERM in seen
+
+    async def on_a_real_loop():
+        loop = asyncio.get_running_loop()
+        em_shutdown.install(loop, asyncio.Event())
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.remove_signal_handler(sig)
+
+    asyncio.run(on_a_real_loop())
+
+
+def test_finish_imports_the_real_stoppers(monkeypatch):
+    import em_db
+    monkeypatch.setattr(em_db, "close", lambda: None)
+
+    class Azc:
+        async def async_unregister_service(self, info):
+            raise OSError("mdns down")
+
+        async def async_close(self):
+            pass
+
+    class Runner:
+        async def cleanup(self):
+            pass
+
+    asyncio.run(em_shutdown.finish((), Azc(), object(), Runner()))
+
+
 def test_close_checkpoints_and_a_second_close_is_quiet(tmp_path):
     path = tmp_path / "em.db"
     em_db.init(str(path))

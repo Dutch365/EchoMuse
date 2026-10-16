@@ -12,20 +12,20 @@ import signal
 log = logging.getLogger("echomuse")
 
 
+def _on_signal(stop, sig) -> None:
+    try:
+        name = signal.Signals(sig).name
+    except ValueError:
+        name = str(sig)
+    log.info(f"Received {name} — shutting down")
+    stop.set()
+
+
 def install(loop, stop) -> None:
     """Set `stop` on SIGTERM or SIGINT. Safe to call once, from main()."""
-
-    def _stop(sig):
-        try:
-            name = signal.Signals(sig).name
-        except ValueError:
-            name = str(sig)
-        log.info(f"Received {name} — shutting down")
-        stop.set()
-
     for sig in (signal.SIGTERM, signal.SIGINT):
         try:
-            loop.add_signal_handler(sig, _stop, sig)
+            loop.add_signal_handler(sig, _on_signal, stop, sig)
         except (NotImplementedError, RuntimeError, ValueError):
             log.warning(f"No signal handler for {sig}")
 
