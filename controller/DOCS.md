@@ -48,48 +48,53 @@ first 8 hex characters of SHA-1 of the repository URL, lowercased
 (`get_hash_from_repository` in `supervisor/store/utils.py`).
 `https://github.com/wilbowes/EchoMuse` hashes to `acc06409`.
 
-A folder copied to the local add-ons directory is repository `local`, so
-the same `slug: controller` becomes `local_controller`. Supervisor stores
-each add-on's database and device-link CA at `addons/data/<that full name>`
-(`path_data` in `addon.py`). `addons/data/local_controller` is a new
-directory. It is not `addons/data/acc06409_controller`. Starting the local
-add-on while it is empty creates a new database and a new CA. With device
-approval set to strict, every Dot then comes up unpaired.
+A folder copied to the local apps directory is repository `local`, so the
+same `slug: controller` becomes `local_controller`. Supervisor stores each
+app's files at `apps/data/<that full name>` (`path_data`). On this
+Supervisor that is `/mnt/data/supervisor/apps/data`, and the local app
+source is `/mnt/data/supervisor/apps/local`. Older builds use `addons/data`
+and `addons/local`. `migrate_addon_data.sh` uses `apps/` when that
+directory exists, and `addons/` otherwise. `--data-root` overrides it.
 
-Stop the original add-on. Do not uninstall it. Uninstall deletes
-`addons/data/acc06409_controller`. On the Home Assistant host:
+`apps/data/local_controller` is a new directory. It is not
+`apps/data/acc06409_controller`. Starting the local app while it is empty
+creates a new database and a new CA. With device approval set to strict,
+every Dot then comes up unpaired. Device config also points at
+`/data/oww_models/hey_leo_v6.onnx`, and firmware is read from `/data/firmware/`,
+so those have to be in the copy too.
+
+Stop the original app. Do not uninstall it. Uninstall deletes its data
+directory. From the Advanced SSH app (it has `SUPERVISOR_TOKEN` and can
+see `/mnt/data/supervisor`):
 
 ```bash
 controller/tools/make_dev_addon.sh --keep-slug
-controller/tools/migrate_addon_data.sh copy \
-    --data-root /mnt/data/supervisor/addons/data
-controller/tools/migrate_addon_data.sh check \
-    --data-root /mnt/data/supervisor/addons/data
+controller/tools/migrate_addon_data.sh copy
+controller/tools/migrate_addon_data.sh check
 ```
 
-Copy the folder `make_dev_addon.sh` prints into the local add-ons directory
-and reload the store, then install it. The `check` command is the
-pre-flight: it exits non-zero when `addons/data/local_controller` has no
-`echomuse.db` and no `tls/` CA, and it says not to start. The add-on
+Copy the folder `make_dev_addon.sh` prints into `apps/local` and reload
+the store, then install it. `copy` sets the original app's boot to
+`manual` (`POST /apps/acc06409_controller/options` with `{"boot":"manual"}`)
+and then copies the whole data directory. A reboot does not start the
+original on ports 8767, 8770 and 8768 beside the local app. `check` exits non-zero unless the target has `echomuse.db`,
+`tls/`, `oww_models/hey_leo_v6.onnx` and a non-empty `firmware/`. The app
 itself exits the same way (`EM_REQUIRE_EXISTING_DATA`) if it is started
-anyway. A Supervised install uses `/usr/share/hassio/addons/data` as
-`--data-root`. The Samba `addons` share is the local add-on source, not
-this data root.
+anyway.
 
-The two builds share ports 8767, 8770 and 8768. Start the local add-on
-only after the check passes, and only while the original is stopped.
+Start `local_controller` only after `check` passes, and only while the
+original is stopped.
 
-The copy leaves the original directory where it is. Rollback is: stop
-`local_controller`, start `acc06409_controller`.
+The copy leaves the original directory where it is. Rollback stops the
+local app, sets the original boot back to `auto`, and starts the original:
 
 ```bash
-controller/tools/migrate_addon_data.sh rollback \
-    --data-root /mnt/data/supervisor/addons/data
+controller/tools/migrate_addon_data.sh rollback
 ```
 
 That command checks the original directory is still intact and does not
 move it. This patch does not change the database schema and does not
-change firmware.
+change the device firmware.
 
 The `image:` pin in `config.yaml` names the published upstream image. A
 local add-on drops that pin and builds this tree.
@@ -101,7 +106,7 @@ land on `acc06409_controller`. The prefix is a hash of the repository URL
 Supervisor was given, not of the `slug` field, and `config.yaml` has no
 field that sets it. `https://github.com/Dutch365/EchoMuse` hashes to
 `84c6fece`, so that store's add-on is `84c6fece_controller` with a new
-empty `addons/data/84c6fece_controller`. The same URL with a `.git` suffix
+empty `apps/data/84c6fece_controller`. The same URL with a `.git` suffix
 is a third id (`93341de2`). Letter case does not change the hash;
 Supervisor lowercases the URL first. The only URL that maps to `acc06409`
 is the existing wilbowes store URL. The database and `tls/` still have to

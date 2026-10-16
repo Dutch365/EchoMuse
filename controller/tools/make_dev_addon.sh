@@ -5,7 +5,8 @@
 # branch cannot be installed — which means add-on changes are untestable until
 # they are on main, exactly backwards for anything add-on-specific (ingress,
 # options, /data, auth). A local add-on is the way round it: Supervisor builds
-# whatever sits in /addons/<folder> on the Home Assistant host.
+# whatever sits in apps/local/<folder> on the Home Assistant host
+# (older Supervisor builds use addons/local).
 #
 # This generates that folder from the real config.yaml rather than asking
 # anyone to hand-edit it. Hand-editing is how the dev copy and the shipped one
@@ -17,15 +18,18 @@
 #
 # --keep-slug leaves slug "controller". Supervisor still prefixes a local
 # add-on, so the installed name is local_controller and its data directory
-# is addons/data/local_controller. That is not the git add-on's directory
-# (addons/data/acc06409_controller for the wilbowes store URL). The build
-# sets EM_REQUIRE_EXISTING_DATA=1, and em_start refuses to start until
-# echomuse.db and tls/ have been copied in. tools/migrate_addon_data.sh
-# does that copy. The default slug is controller-dev so a local build can
+# is apps/data/local_controller (older Supervisor: addons/data). That is
+# not the git app's directory (apps/data/acc06409_controller for the
+# wilbowes store URL). The build sets EM_REQUIRE_EXISTING_DATA=1, and
+# em_start refuses to start until the whole data directory has been copied
+# in, including the wake model and firmware. tools/migrate_addon_data.sh
+# does that copy and sets the original app's boot to manual. The default
+# slug is controller-dev so a local build can
 # sit beside the released add-on; that one has its own empty /data.
 #
-# Then copy the result to /addons/ on the Home Assistant host (the `addons`
-# Samba share, or scp via the SSH add-on) and look in
+# Then copy the result to apps/local on the Home Assistant host (older
+# Supervisor builds use addons/local; the Samba share, or scp via the SSH
+# app) and look in
 # Settings -> Add-ons -> Add-on Store; local add-ons appear at the top.
 #
 # Nothing here compiles: ffmpeg is apt, and onnxruntime, speexdsp-ns, scipy
@@ -125,27 +129,32 @@ PY
 echo "Local add-on written to: $OUT"
 echo "  version: $VERSION"
 echo
-echo "Copy it to /addons/ on the Home Assistant host, then reload the store."
+echo "Copy it to apps/local on the Home Assistant host (older builds:"
+echo "addons/local), then reload the store."
 echo
 if [ "$KEEP_SLUG" = 1 ]; then
     echo "Slug in config.yaml stays controller. Supervisor names a local"
-    echo "add-on local_controller. Its data directory is"
-    echo "addons/data/local_controller, which starts empty. The installed"
-    echo "add-on from the wilbowes store is acc06409_controller, a different"
+    echo "app local_controller. Its data directory is apps/data/local_controller"
+    echo "(older Supervisor: addons/data), which starts empty. The installed"
+    echo "app from the wilbowes store is acc06409_controller, a different"
     echo "directory. This build refuses to start until that data is copied."
     echo
-    echo "On the Home Assistant host, stop the original add-on, then:"
-    echo "  tools/migrate_addon_data.sh copy --data-root /mnt/data/supervisor/addons/data"
-    echo "  tools/migrate_addon_data.sh check --data-root /mnt/data/supervisor/addons/data"
-    echo "Supervised installs use /usr/share/hassio/addons/data. The check"
-    echo "exits non-zero when the target has no echomuse.db and tls/, and"
-    echo "the add-on does the same check at start. Do not start it before"
-    echo "the check passes. Do not run both at once: they share ports"
-    echo "8767, 8770 and 8768. Do not uninstall either one."
+    echo "On the Home Assistant host, from the Advanced SSH app, stop the"
+    echo "original, then:"
+    echo "  tools/migrate_addon_data.sh copy"
+    echo "  tools/migrate_addon_data.sh check"
+    echo "The script uses /mnt/data/supervisor/apps/data when that exists,"
+    echo "otherwise addons/data. --data-root overrides it. copy copies the"
+    echo "whole directory and sets the original app's boot to manual, so a"
+    echo "reboot does not start both. check exits non-zero without the"
+    echo "database, tls/, oww_models/hey_leo_v6.onnx and firmware/. The app"
+    echo "does the same check at start. Do not start it before check passes."
+    echo "Do not run both at once: they share ports 8767, 8770 and 8768."
+    echo "Do not uninstall either one."
     echo
-    echo "Rollback: stop local_controller and start acc06409_controller."
-    echo "The copy leaves the original directory in place. Confirm with:"
-    echo "  tools/migrate_addon_data.sh rollback --data-root /mnt/data/supervisor/addons/data"
+    echo "Rollback sets the original boot back to auto. Then stop"
+    echo "local_controller and start acc06409_controller:"
+    echo "  tools/migrate_addon_data.sh rollback"
     echo
     echo "Satellite ports stay on the GA base (16001)."
 else
@@ -157,8 +166,8 @@ else
     echo "add-on's CA will dial wss, fail verification and never connect — it"
     echo "picks wss from the mDNS tls_port record, not from require_device_tls,"
     echo "so turning that off does not help. To test against a real device,"
-    echo "copy the released add-on's /data (at minimum tls/, all four files)"
-    echo "into the dev add-on's /data before starting it."
+    echo "copy the released app's whole /data (database, tls/, oww_models/,"
+    echo "firmware/) into the dev app's /data before starting it."
     echo
     echo "To build the replacement (slug controller, and it will not start"
     echo "until the installed add-on's data is copied), run this script"

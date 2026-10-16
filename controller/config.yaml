@@ -20,17 +20,18 @@ version: "2.26.1"
 # branch), and "it compiles onnxruntime" made that loop look far more
 # expensive than it is. tools/make_dev_addon.sh packages one.
 image: "ghcr.io/wilbowes/echomuse-controller"
-# Supervisor stores this add-on's database and device-link CA at
-# addons/data/<repository>_<slug> (addon.py path_data). The slug below
-# stays "controller". The repository id is "local" for a folder in the
-# local add-ons directory, and the first 8 hex characters of SHA-1 of the
-# store URL for a git repository. https://github.com/wilbowes/EchoMuse
-# is acc06409, so that install's directory is addons/data/acc06409_controller.
-# A local build is addons/data/local_controller. Uninstall deletes whichever
-# directory belongs to the add-on being removed. A local build does not
-# share the git add-on's directory; tools/migrate_addon_data.sh copies
-# echomuse.db and tls/ across, and the local replacement refuses to start
-# while the target is empty.
+# Supervisor stores this app's data at <apps-or-addons>/data/<repository>_<slug>
+# (path_data). Current Supervisor uses apps/data and apps/local; older
+# builds use addons/. The slug below stays "controller". The repository id
+# is "local" for a local folder, and the first 8 hex characters of SHA-1 of
+# the store URL for a git repository. https://github.com/wilbowes/EchoMuse
+# is acc06409, so that install's directory is apps/data/acc06409_controller.
+# A local build is apps/data/local_controller. Uninstall deletes whichever
+# directory belongs to the app being removed. A local build does not share
+# the git app's directory; tools/migrate_addon_data.sh copies the whole
+# directory (database, tls/, oww_models/, firmware/) and refuses to start
+# while the target is missing those. It also sets the original app's boot
+# to manual so a reboot does not start both.
 slug: "controller"
 description: "Local, open-source voice assistant controller for rooted Echo Dot 2nd Gen devices — wake word, fleet dashboard, and Home Assistant integration via ESPHome."
 url: "https://github.com/wilbowes/EchoMuse"

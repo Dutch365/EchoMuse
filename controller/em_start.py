@@ -25,6 +25,9 @@ OPTIONS_PATH = Path("/data/options.json")
 # What em_pki.ensure_pki requires before it reuses a CA. Missing any of
 # these, the controller generates a new one and every paired Dot fails TLS.
 TLS_FILES = ("ca.pem", "ca.key", "server.pem", "server.key")
+# Device config stores this path. A copy that brings the database and not
+# the file leaves every Dot pointing at a model that is not there.
+WAKE_MODEL = Path("oww_models") / "hey_leo_v6.onnx"
 
 # config.yaml's `options` keys map to env vars by uppercasing — kept as an
 # explicit table rather than a blanket `.upper()`, so a renamed or removed
@@ -83,11 +86,18 @@ def missing_existing_data(db_path: str) -> list[str]:
     database = Path(db_path)
     if not database.is_file() or database.stat().st_size == 0:
         missing.append(str(database))
-    tls = Path(os.environ.get("TLS_DIR") or (database.parent / "tls"))
+    root = database.parent
+    tls = Path(os.environ.get("TLS_DIR") or (root / "tls"))
     for name in TLS_FILES:
         path = tls / name
         if not path.is_file() or path.stat().st_size == 0:
             missing.append(str(path))
+    model = root / WAKE_MODEL
+    if not model.is_file() or model.stat().st_size == 0:
+        missing.append(str(model))
+    firmware = root / "firmware"
+    if not firmware.is_dir() or not any(firmware.iterdir()):
+        missing.append(str(firmware))
     return missing
 
 
@@ -95,9 +105,11 @@ def ensure_existing_data() -> None:
     """Refuse to start a replacement whose /data was not copied in.
 
     Set only on the local add-on produced by ``make_dev_addon.sh --keep-slug``.
-    A local add-on's data directory is ``addons/data/local_controller``, which
-    Supervisor creates empty. Starting then mints a database and a CA, and
-    with device approval left on strict every Dot comes up unpaired.
+    A local app's data directory is ``apps/data/local_controller`` (older
+    Supervisor builds use ``addons/data``), which Supervisor creates empty.
+    Starting then mints a database and a CA, and with device approval left
+    on strict every Dot comes up unpaired. The wake model and firmware have
+    to be in that directory too: device config points at them.
     """
     if os.environ.get("EM_REQUIRE_EXISTING_DATA") != "1":
         return
@@ -105,12 +117,11 @@ def ensure_existing_data() -> None:
     missing = missing_existing_data(db_path)
     if not missing:
         return
-    print("em_start: refusing to start — existing database or device-link CA "
-          "is missing:", flush=True)
+    print("em_start: refusing to start — copied data is missing:", flush=True)
     for path in missing:
         print(f"em_start:   {path}", flush=True)
-    print("em_start: copy the installed add-on's echomuse.db and tls/ into "
-          "this add-on's data directory, then start again. "
+    print("em_start: copy the installed app's whole data directory "
+          "(database, tls/, oww_models/, firmware/) and start again. "
           "tools/migrate_addon_data.sh does that copy and the same check.",
           flush=True)
     sys.exit(1)
