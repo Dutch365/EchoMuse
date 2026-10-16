@@ -83,7 +83,10 @@ multiple Echoes in the same room I'm probably not going to care which answers
 me"), and between rooms the lead is large, 9.7dB at the least in that house's
 fourteen contested wakes. Inside one room levels sit within a decibel or two
 and the choice between those Echoes is arbitrary, which is acceptable; a
-margin would only hand those cases back to the frame grid.
+margin would only hand those cases back to the frame grid. An exact tie
+breaks on wake score, then on who was heard first. When every claim carries
+a noise floor, loudness is speech above that floor (level minus floor);
+otherwise it is the level itself.
 
 Loudness is `level` from em_wakelevel, the energy mean over the wake's window:
 post-AEC, AGC never runs on the wake stream, and the mic gain setting is
@@ -124,15 +127,28 @@ class Claim(NamedTuple):
     gains: tuple | None = None
     # Heard over this Echo's own speaker output.
     over_playback: bool = False
+    # Wake score, used only when loudness ties.
+    score: float | None = None
+    # Noise floor in the same dBFS scale as `level`. SNR is level - floor.
+    floor_db: float | None = None
+
+
+def _primary(claim: Claim, use_snr: bool) -> float:
+    """Speech above the noise floor when every claim has one, else the level."""
+    if use_snr:
+        return claim.level - claim.floor_db
+    return claim.level
 
 
 def pick(claims: list) -> tuple:
     """
     (winner, why) among claims for one utterance.
 
-    The loudest wins. Without levels that can be compared the earliest heard
-    wins, and a tie goes to the claim that arrived first. `why` is for the
-    log line.
+    The loudest wins: speech level above the noise floor when every claim
+    carries a floor, otherwise the level itself. A louder room beats a
+    higher score and an earlier hearing. Equal loudness breaks on wake
+    score, then on who was heard first. Without levels that can be compared
+    the earliest heard wins. `why` is for the log line.
     """
     earliest = min(claims, key=lambda c: c.heard)
     if len(claims) < 2:
@@ -143,9 +159,22 @@ def pick(claims: list) -> tuple:
         return earliest, "earliest heard; one was heard over playback"
     if len({c.gains for c in claims}) > 1:
         return earliest, "earliest heard; gain settings differ"
-    by_level = sorted(claims, key=lambda c: c.level, reverse=True)
-    lead = by_level[0].level - by_level[1].level
-    return by_level[0], f"loudest by {lead:.1f}dB"
+    use_snr = all(c.floor_db is not None for c in claims)
+    # Heard order first, then loudness, so an equal level keeps the claim
+    # that was heard first. Both sorts are stable.
+    ordered = sorted(claims, key=lambda c: c.heard)
+    ordered.sort(key=lambda c: _primary(c, use_snr), reverse=True)
+    best, second = ordered[0], ordered[1]
+    lead = _primary(best, use_snr) - _primary(second, use_snr)
+    if (lead == 0 and best.score is not None and second.score is not None
+            and best.score != second.score):
+        tied = [c for c in ordered
+                if _primary(c, use_snr) == _primary(best, use_snr)
+                and c.score is not None]
+        best = max(tied, key=lambda c: (c.score, -c.heard))
+        return best, f"wake score {best.score:.2f}"
+    unit = "dB SNR" if use_snr else "dB"
+    return best, f"loudest by {lead:.1f}{unit}"
 
 
 class WakeArbiter:
@@ -200,7 +229,9 @@ class WakeArbiter:
     async def contest(self, device_id: str, window_s: float,
                       heard_at: float | None = None, slack_s: float = 0.0,
                       hold_s: float = 0.0, level: float | None = None,
-                      gains: tuple | None = None, over_playback: bool = False) -> str:
+                      gains: tuple | None = None, over_playback: bool = False,
+                      score: float | None = None,
+                      floor_db: float | None = None) -> str:
         """
         claim(), held so that every Echo that heard the utterance is counted
         and `pick()` chooses the loudest, or failing a usable level the one
@@ -220,7 +251,8 @@ class WakeArbiter:
         if self._contest is not None:
             opened, entries, decided = self._contest
             if abs(heard - opened) < window_s:
-                entries.append(Claim(heard, device_id, level, gains, over_playback))
+                entries.append(Claim(
+                    heard, device_id, level, gains, over_playback, score, floor_db))
                 return await asyncio.shield(decided)
 
         # No contest to join. A granted winner still holds this utterance.
@@ -229,7 +261,8 @@ class WakeArbiter:
                 and now - self._heard_at < window_s + max(0.0, slack_s)):
             return self._winner
 
-        entries = [Claim(heard, device_id, level, gains, over_playback)]
+        entries = [Claim(
+            heard, device_id, level, gains, over_playback, score, floor_db)]
         decided: asyncio.Future = loop.create_future()
         self._contest = (heard, entries, decided)
         try:

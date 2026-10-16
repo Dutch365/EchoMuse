@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.26.1-dutch365
+
+Based on controller 2.26.1. No database migration and no firmware change. Roll back by installing 2.26.1 again and keeping this add-on's data directory (`addons/data/controller`, including `tls/`).
+
+### Fixed
+
+- A backed-up wake queue held about five seconds of microphone audio (64 frames × 80 ms) because a full queue only dropped the oldest frame and therefore stayed full. It now keeps the last half-second, and wake scoring runs on its own threads instead of the pool that also does database work.
+- When two Echoes hear one wake, the louder one answers. Loudness is the speech level above that Echo's noise floor when every claim has a floor, and the level itself otherwise. An exact tie breaks on wake score. A kitchen Echo at −42 dBFS and score 0.94 beats a master Echo at −79 dBFS and score 0.97 that was heard 0.16 s earlier.
+
+### Added
+
+- Optional second-stage wake check, off unless a URL is set. A streaming or shadow wake is posted (about 1.5 s of pre-roll, score, device id, RMS) and the controller waits for `{"accept": true}` or `{"accept": false}`. The wait defaults to 300 ms. A timeout or an error accepts the wake unless the error policy is reject. Private listening is not sent. Add-on options: `wake_verify_url`, `wake_verify_timeout_ms`, `wake_verify_on_error`. The same variables are `WAKE_VERIFY_URL`, `WAKE_VERIFY_TIMEOUT_MS` and `WAKE_VERIFY_ON_ERROR` on the container.
+
+### Install
+
+The published image pin in `config.yaml` is still upstream 2.26.1, which does not contain this patch. Install the local add-on so Supervisor builds this tree:
+
+```bash
+cd controller && tools/make_dev_addon.sh --keep-slug
+```
+
+Copy that folder to `/addons/` on the Home Assistant host and reload the store. `--keep-slug` leaves slug `controller`. Supervisor stores the database and the device-link CA at `addons/data/<slug>` (`path_data` in home-assistant/supervisor `addon.py`). The same slug is the same directory, which is what keeps the Dots paired.
+
+Stop the running add-on before starting this one. They share ports 8767, 8770 and 8768. Do not uninstall first: uninstall deletes `addons/data/controller`. If an uninstall cannot be avoided, copy that directory aside and put it back before the first start.
+
+Rollback is the same in reverse: stop this build, install controller 2.26.1 with slug `controller`, and leave the data directory in place. This patch does not migrate the database.
+
 ## 2.26.1
 
 Fixes on top of 2.26.0. Pair with firmware v2.18.1, which this controller offers. No database changes.

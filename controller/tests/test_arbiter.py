@@ -406,6 +406,44 @@ def test_a_held_contest_gives_the_turn_to_the_loudest():
     assert run(main()) == ("near", "near", "loudest by 20.0dB")
 
 
+def test_louder_room_beats_a_higher_score_heard_earlier():
+    """Kitchen −42 dBFS score 0.94, master −79 dBFS score 0.97, master
+    first by 0.16s. The kitchen answers."""
+    claims = [Claim(0.00, "master", -79.0, score=0.97),
+              Claim(0.16, "kitchen", -42.0, score=0.94)]
+    assert _who(claims)[0] == "kitchen"
+
+
+def test_speech_above_the_noise_floor_is_the_loudness():
+    """Same shape with floors: kitchen is still further above its floor."""
+    claims = [Claim(0.00, "master", -79.0, score=0.97, floor_db=-85.0),
+              Claim(0.16, "kitchen", -42.0, score=0.94, floor_db=-60.0)]
+    who, why = _who(claims)
+    assert who == "kitchen"
+    assert "SNR" in why
+
+
+def test_equal_loudness_breaks_on_wake_score():
+    claims = [Claim(0.00, "master", -50.0, score=0.97),
+              Claim(0.05, "kitchen", -50.0, score=0.94)]
+    who, why = _who(claims)
+    assert who == "master"
+    assert "wake score" in why
+
+
+def test_a_held_contest_gives_the_louder_room_the_turn():
+    async def main():
+        arb = WakeArbiter()
+        t = asyncio.get_running_loop().time()
+        master = asyncio.create_task(arb.contest(
+            "master", 0.3, heard_at=t, hold_s=HOLD, level=-79.0, score=0.97))
+        await asyncio.sleep(0.02)
+        kitchen = asyncio.create_task(arb.contest(
+            "kitchen", 0.3, heard_at=t + 0.16, hold_s=HOLD, level=-42.0, score=0.94))
+        return await master, await kitchen
+    assert run(main()) == ("kitchen", "kitchen")
+
+
 def test_a_held_contest_without_levels_still_goes_to_the_first_to_hear():
     async def main():
         arb = WakeArbiter()

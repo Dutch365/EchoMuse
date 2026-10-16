@@ -34,6 +34,13 @@ version: "2.26.1-ea.1"
 # branch), and "it compiles onnxruntime" made that loop look far more
 # expensive than it is. tools/make_dev_addon.sh packages one.
 image: "ghcr.io/wilbowes/echomuse-controller"
+# Supervisor stores this add-on's database and device-link CA at
+# addons/data/<slug> (home-assistant/supervisor addon.py path_data).
+# `controller` is the upstream slug. A replacement that keeps it uses the
+# same directory, so paired Dots keep their CA. Uninstall deletes that
+# directory. Stop the add-on, and copy the directory aside before any
+# uninstall. A local build that should replace in place is
+# `tools/make_dev_addon.sh --keep-slug`.
 slug: "controller-ea"
 description: "Early Access build of the EchoMuse controller — the next release, before it is general. Install this INSTEAD of the stable add-on, not alongside it: both use host networking and the same ports. Add-ons do not share storage, so switching channels starts with an empty database and a new certificate authority, and existing devices will not connect until the stable add-on's /data is copied across."
 url: "https://github.com/wilbowes/EchoMuse"
@@ -106,6 +113,14 @@ options:
   # goes idle while the controller is still waiting, which is the same silent
   # failure from the other side.
   tts_wait_timeout: 30
+  # Second-stage wake check. Empty disables it: nothing is posted and the
+  # wake path does not wait. The URL is the operator's checker (no default
+  # host). A streaming wake POSTs about 1.5s of pre-roll plus score, device
+  # id and RMS, and waits for {"accept": true} or {"accept": false}.
+  wake_verify_url: ""
+  wake_verify_timeout_ms: 300
+  # accept: a timeout or an error still wakes. reject: drop the wake.
+  wake_verify_on_error: "accept"
 schema:
   server_host: "str"
   server_ip: "str"
@@ -120,3 +135,6 @@ schema:
   log_levels: "str"
   extra_ca_cert: "str?"
   tts_wait_timeout: "int(5,120)"
+  wake_verify_url: "str"
+  wake_verify_timeout_ms: "int(50,2000)"
+  wake_verify_on_error: "list(accept|reject)"

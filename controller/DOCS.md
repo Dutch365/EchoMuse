@@ -39,6 +39,46 @@ accounts see turn timings, scores and outcomes but not the audio or the
 text of what was said. Recording is off by default and stays that way until
 you turn it on per device.
 
+## Replacing an existing EchoMuse add-on
+
+This build keeps slug `controller`, the same slug as the upstream add-on.
+Home Assistant Supervisor stores each add-on's files at `addons/data/<slug>`
+(the `path_data` property in Supervisor's `addon.py`). The database
+(`echomuse.db`) and the device-link CA (`tls/`) live there. The same slug
+is the same directory, so Dots that are already paired stay paired.
+
+Stop the add-on before starting the replacement. Both use host networking
+and ports 8767, 8770 and 8768.
+
+Uninstall deletes `addons/data/controller`. If you do have to uninstall,
+copy that directory aside first and put it back before the first start of
+the new build. A local folder that keeps the slug is:
+
+```bash
+controller/tools/make_dev_addon.sh --keep-slug
+```
+
+The `image:` pin in `config.yaml` names the published upstream image. A
+local add-on drops that pin and builds this tree, which is how this patch
+is installed before an image exists.
+
+This patch does not change the database schema and does not change
+firmware. Rolling back is installing controller 2.26.1 with the same slug
+and the same data directory.
+
+## Second-stage wake check
+
+Leave **Second-stage wake check URL** empty and nothing is posted. Set it
+to your checker. A streaming wake (the controller is scoring, or shadow
+mode) is sent as JSON: device id, score, frame RMS, and about 1.5 seconds
+of audio in `audio_wav_b64`. Reply with `{"accept": true}` or
+`{"accept": false}` within the timeout (default 300 ms). If the checker
+does not answer, the wake is accepted unless you set the error policy to
+reject.
+
+An Echo that listens privately is not sent. It does not stream audio
+before its own wake word, so there is no clip on this side.
+
 ## Configuration
 
 Every option is explained inline in the add-on's Configuration tab. For the
