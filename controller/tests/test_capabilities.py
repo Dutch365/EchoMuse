@@ -381,6 +381,23 @@ def test_the_controller_announces_its_own_features_and_the_device_reads_them():
     )
 
 
+def test_wake_preroll_is_negotiated_in_both_directions():
+    """The clip is added to oww_wake, and only when both sides say so.
+
+    The device announces wake_preroll. The controller announces the same
+    string on the ack. Firmware sends the field only when it sees the
+    feature; a controller with no field (older firmware) does not invent one.
+    """
+    assert "wake_preroll" in device_capabilities()
+    py = CONTROLLER.read_text()
+    block = py[py.index("CONTROLLER_FEATURES = ["):]
+    block = block[:block.index("]") + 1]
+    assert '"wake_preroll"' in block
+    assert re.search(r'FeatureWakePreroll\s*=\s*"wake_preroll"', CONTROL_GO.read_text())
+    # The device must not attach the clip unless the controller asked.
+    assert "FeatureWakePreroll" in (ROOT / "device" / "cmd" / "server.go").read_text()
+
+
 def test_private_listening_is_negotiated_in_both_directions():
     """docs/listening.md: the device listens privately only against a
     controller announcing listen_session, and the controller treats a device

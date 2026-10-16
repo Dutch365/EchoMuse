@@ -9,18 +9,26 @@ error, or a body that is not that object follows ``WAKE_VERIFY_ON_ERROR``,
 which defaults to accept, so a checker that is down does not silence the
 house.
 
-Private listening has no pre-roll on this side (the Echo opens the session
-after its own wake word, and that audio is not fed into the capture ring).
-Those wakes are not sent. Nothing here is a default host: the URL is the
-operator's.
+Private listening used to have no pre-roll on this side: the Echo opens the
+session after its own wake word, and that audio is not fed into the capture
+ring. Firmware that announces a clip sends it on the wake itself
+(``oww_wake`` ``preRoll``, about 1.5s ending at the crossing). Those wakes
+are checked. A private wake with no clip is still not sent — older firmware
+has nothing to check, and an empty POST is not a second opinion.
+
+Nothing here is a default host: the URL is the operator's. The hook stays
+off when the URL is empty, and a timeout or a transport error follows
+``WAKE_VERIFY_ON_ERROR``, which defaults to accept.
 """
 
 from __future__ import annotations
 
+import array
 import asyncio
 import base64
 import logging
 import os
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -143,12 +151,48 @@ async def check(cfg: Settings, *, device_id: str, score, rms, pcm: bytes,
     return accepted
 
 
+def pcm_rms(pcm: bytes) -> float:
+    """RMS of 16-bit little-endian PCM, on the same 0..1 scale as a mic frame."""
+    n = len(pcm) // 2
+    if n == 0:
+        return 0.0
+    samples = array.array("h")
+    samples.frombytes(pcm[: n * 2])
+    if sys.byteorder != "little":
+        samples.byteswap()
+    acc = 0.0
+    for s in samples:
+        x = s / 32768.0
+        acc += x * x
+    return (acc / n) ** 0.5
+
+
+def pcm_for_check(controller_pcm: bytes, dev_wake, source: str) -> bytes:
+    """Which clip a streaming wake hands the checker.
+
+    A device wake uses the Echo's own pre-roll when the wake carried one —
+    that is the audio the on-device model scored. Anything else uses the
+    ring this process already holds.
+    """
+    if source == "device" and isinstance(dev_wake, dict):
+        clip = dev_wake.get("preroll")
+        if clip:
+            return clip
+    return controller_pcm or b""
+
+
 def begin(*, device_id: str, score, rms, pcm: bytes, streaming: bool | None,
-          has_session: bool = False, cfg: Settings | None = None,
-          post=None) -> asyncio.Task | None:
-    """Start the check, or return None when this wake must not be sent."""
+          has_session: bool = False, device_clip: bool = False,
+          cfg: Settings | None = None, post=None) -> asyncio.Task | None:
+    """Start the check, or return None when this wake must not be sent.
+
+    ``device_clip`` is a private (or otherwise non-streaming) wake that
+    brought its own pre-roll. Without that clip the wake is not sent.
+    """
     cfg = settings() if cfg is None else cfg
-    if not cfg.enabled or classify(has_session, streaming) != "stream":
+    if not cfg.enabled:
+        return None
+    if classify(has_session, streaming) != "stream" and not (device_clip and pcm):
         return None
     return asyncio.create_task(check(
         cfg, device_id=device_id, score=score, rms=rms, pcm=pcm, post=post))

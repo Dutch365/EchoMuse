@@ -253,7 +253,10 @@ type DataClient struct {
 	listenGate *listen.Gate
 	// wakeLevels holds the wake stream's recent frame levels, for the level
 	// sent on oww_wake (wakelevel.go).
-	wakeLevels  levelRing
+	wakeLevels levelRing
+	// wakePreroll is the same frames, as audio, so an on-device wake can
+	// carry the word it scored (preroll.go). Nothing here is sent on its own.
+	wakePreroll prerollRing
 	listenState atomic.Value // string
 	// onListenEnd reports a session the device closed on its own (deadline,
 	// mute, link). Set once at wiring time.
@@ -1353,6 +1356,7 @@ func (d *DataClient) streamMic(conn *websocket.Conn, stopCh <-chan struct{}, loc
 					buf = buf[vadOwwChunkBytes:]
 					at := time.Now()
 					d.wakeLevels.push(at, vadPeriodRMS(chunk), gainLin)
+					d.wakePreroll.push(at, chunk)
 					// Score the SAME bytes on the SAME 80ms boundaries the
 					// controller receives in stream mode, so a device/controller
 					// score difference can only be the engine, not the framing.

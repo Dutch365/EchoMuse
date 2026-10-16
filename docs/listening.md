@@ -132,7 +132,7 @@ Echo → controller, `/control`:
 | `type` | Fields | Meaning |
 |--------|--------|---------|
 | `listen_state` | `state` (`local`/`stream`/`degraded`), `reason?` | Sent on every change and after every `ack` |
-| `oww_wake` | `score`, `threshold`, `ageMs`, **`session`**, **`floor`**, **`barge`** | A local wake opened session `session`. `ageMs` is how long ago the wake word's last frame was **captured**. `floor` is the Echo's noise floor (RMS). `barge` is true when the speaker was playing |
+| `oww_wake` | `score`, `threshold`, `ageMs`, **`session`**, **`floor`**, **`barge`**, `preRoll?` | A local wake opened session `session`. `ageMs` is how long ago the wake word's last frame was **captured**. `floor` is the Echo's noise floor (RMS). `barge` is true when the speaker was playing. `preRoll` is one clip of the audio that crossed, sent only when the controller announced `wake_preroll` |
 | `listen_end` | `session`, `reason` | The Echo closed a session on its own (`ack_timeout`, `max_open`, `muted`, `link`) |
 
 Controller → Echo, `/control`:
@@ -174,6 +174,19 @@ to text: `VOICE_PREROLL_DISCARD` (240 ms) applies only to a stream the
 controller scored itself, because on a session it removed the first word of a
 command spoken straight after the wake word (`em_listen.tail_discard`).
 A wake spoken over a reply opens a session the same way and is treated the same.
+
+The wake word itself is not in that session. "Hey Leo" is about 0.6–0.8s, and
+the frames the session sends begin after the crossing, so a checker on the
+controller never heard the word. A second ring, about 1.5s plus the scorer's
+queue, stays in memory on the wake stream. When the controller has announced
+`wake_preroll`, the crossing's `oww_wake` carries `preRoll`: 16 kHz mono
+`S16_LE`, ending at the crossing frame, once. Nothing is streamed before the
+wake. Firmware that does not see the feature omits the field, and a controller
+that does not see the field leaves the wake unchecked. The optional second
+stage (`WAKE_VERIFY_URL`, off when unset) is what reads the clip; a timeout or
+a transport error accepts, which is `WAKE_VERIFY_ON_ERROR`. The device's ack
+clock is 3s from the session opening and already includes `ageMs`, so a checker
+timeout near 2s can expire the session before `listen_ack`.
 
 Timestamps come from one `time.Now()` taken when the frame is handed to both
 the scorer and the ring, so the scorer's queue delay (up to 640 ms when busy)

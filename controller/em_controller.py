@@ -386,8 +386,13 @@ BLE_ADVERTS_TYPE   = 0x06
 # device that announced the same capability (#656), as BLE_GATT_TYPE frames in
 # both directions. A message on a new frame code is negotiated both ways for
 # the usual reason: sent to a side that does not read it, it vanishes.
+#
+# "wake_preroll": this controller reads preRoll on oww_wake (about 1.5s of
+# mic audio ending at the crossing) and can hand it to the second-stage
+# checker. The device sends the field only when it sees this. Older firmware
+# omits it, and a private wake then stays unchecked.
 CONTROLLER_FEATURES = ["ble_adverts_data", "listen_session", "output_chain",
-                       "ble_connect"]
+                       "ble_connect", "wake_preroll"]
 BLE_GATT_TYPE      = em_ble_gatt.FRAME_BLE_GATT
 SPEAKER_FRAME_TYPE = 0x02
 SPEAKER_EOS_TYPE   = 0x03
@@ -3362,46 +3367,69 @@ async def _private_wake_turn(device: Device, ev: dict) -> None:
         "noise_floor": round(device.noise_floor, 5),
     }
 
-    serves = esphome.can_serve_turn(device.device_id)
-    won_by = device.device_id
-    if serves and device.wake_arb_ms > 0 and len(em_state.devices) > 1:
-        won_by = await _claim_wake(device, _wake_heard_at(device, ev),
-                                   _device_level(ev), by="device",
-                                   over_playback=bool(ev.get("barge")),
-                                   score=float(score))
-    if not serves or won_by != device.device_id:
-        wake_info = device.last_wake
-        device.last_wake = None
-        await device.listen_close(session, "no_ha" if not serves else "ceded")
-        if not serves:
-            await esphome.record_dropped_wake(device, f"wakeword({score:.3f})", wake_info)
-            await _leds_turn_end(device)
-            log.info(f"[{device.device_id}] Wake heard but no HA connection — standing down "
-                     f"(score={score:.3f})")
-            em_dbwriter.submit(db.log_device, device.device_id, "info", "controller",
-                          "Wake heard but no HA connection")
-        else:
-            # The Echo lit its own listening ring at the crossing; nothing on
-            # a ceding path darkens it otherwise.
-            await leds_off(device)
-            log.info(f"[{device.device_id}] Wake ceded to {won_by} "
-                     f"(arbitration; score={score:.3f})")
-            em_dbwriter.submit(db.log_device, device.device_id, "info", "controller",
-                          f"Wake ceded to {won_by} (arbitration)")
-        return
-
-    await device.listen_ack(session)
-    device.oww_paused.set()
-    device.oww_paused_since = asyncio.get_event_loop().time()
-    await device.beam_lock()
+    # The Echo's clip, when this firmware sent one. The check overlaps
+    # arbitration. It is awaited before listen_ack: that ack is what plays
+    # the wake sound, and a rejected wake must not beep. No clip (older
+    # firmware) or an empty URL skips the check and accepts.
+    clip = ev.get("preroll") or b""
+    verify = em_wakeverify.begin(
+        device_id=device.device_id, score=float(score),
+        rms=em_wakeverify.pcm_rms(clip), pcm=clip,
+        streaming=False, has_session=True, device_clip=bool(clip),
+    )
     try:
-        await _run_voice_locked(device, trigger_label=f"wakeword-dev({score:.3f})",
-                                is_wakeword=True, session=session)
+        serves = esphome.can_serve_turn(device.device_id)
+        won_by = device.device_id
+        if serves and device.wake_arb_ms > 0 and len(em_state.devices) > 1:
+            won_by = await _claim_wake(device, _wake_heard_at(device, ev),
+                                       _device_level(ev), by="device",
+                                       over_playback=bool(ev.get("barge")),
+                                       score=float(score))
+        if not serves or won_by != device.device_id:
+            wake_info = device.last_wake
+            device.last_wake = None
+            await device.listen_close(session, "no_ha" if not serves else "ceded")
+            if not serves:
+                await esphome.record_dropped_wake(device, f"wakeword({score:.3f})", wake_info)
+                await _leds_turn_end(device)
+                log.info(f"[{device.device_id}] Wake heard but no HA connection — standing down "
+                         f"(score={score:.3f})")
+                em_dbwriter.submit(db.log_device, device.device_id, "info", "controller",
+                              "Wake heard but no HA connection")
+            else:
+                # The Echo lit its own listening ring at the crossing; nothing on
+                # a ceding path darkens it otherwise.
+                await leds_off(device)
+                log.info(f"[{device.device_id}] Wake ceded to {won_by} "
+                         f"(arbitration; score={score:.3f})")
+                em_dbwriter.submit(db.log_device, device.device_id, "info", "controller",
+                              f"Wake ceded to {won_by} (arbitration)")
+            return
+
+        if not await em_wakeverify.finish(verify):
+            em_state.wake_arbiter.release(device.device_id)
+            device.last_wake = None
+            await device.listen_close(session, "rejected")
+            await leds_off(device)
+            log.info(f"[{device.device_id}] Wake rejected by the second-stage checker")
+            em_dbwriter.submit(db.log_device, device.device_id, "info", "controller",
+                          "Wake rejected by the second-stage checker")
+            return
+
+        await device.listen_ack(session)
+        device.oww_paused.set()
+        device.oww_paused_since = asyncio.get_event_loop().time()
+        await device.beam_lock()
+        try:
+            await _run_voice_locked(device, trigger_label=f"wakeword-dev({score:.3f})",
+                                    is_wakeword=True, session=session)
+        finally:
+            # Idempotent: normally closed at end of speech already.
+            if device.listen_session == session:
+                await device.listen_close(session, "turn_end")
+            await device.beam_unlock()
     finally:
-        # Idempotent: normally closed at end of speech already.
-        if device.listen_session == session:
-            await device.listen_close(session, "turn_end")
-        await device.beam_unlock()
+        em_wakeverify.cancel(verify)
 
 
 async def _private_barge(device: Device, ev: dict) -> None:
@@ -3908,7 +3936,7 @@ async def _stream_listen(device: Device):
                             device_id=device.device_id,
                             score=float(score),
                             rms=rms,
-                            pcm=device.wake_capture.snapshot(),
+                            pcm=em_wakeverify.pcm_for_check(device.wake_capture.snapshot(), dev_wake, source),
                             streaming=device.listen_view.streams,
                         )
                         # P0-1: do NOT send mic_stop/mic_start_turn.
@@ -4796,9 +4824,12 @@ async def _on_oww_wake(device: Device, msg: dict) -> None:
     device_id = device.device_id
     if em_wakeverify.classify(
             bool(msg.get("session")), device.listen_view.streams) == "private":
-        # The session audio is not fed into the capture ring, so there is
-        # no clip to send. Streaming wakes are checked in the listener.
-        log.debug(f"[{device_id}] wake verify skipped — private listening")
+        # A clip on the wake is checked in _private_wake_turn, before
+        # listen_ack. Without one (older firmware) there is nothing to send:
+        # the session starts after the crossing and is not fed into the
+        # capture ring. Streaming wakes are checked in the listener.
+        if not msg.get("preRoll"):
+            log.debug(f"[{device_id}] wake verify skipped — private listening, no clip")
     # On-device scoring crossed the bar AND owwOnDevice is
     # "on", so the device is asking for a turn rather than
     # reporting a measurement. Parked here; the wake listener
@@ -4854,7 +4885,8 @@ async def _on_oww_wake(device: Device, msg: dict) -> None:
             f"{device.oww_on_device!r}, not 'on'"
         )
     elif device.pending_wake.offer(
-        msg.get("score"), msg.get("threshold"), msg.get("ageMs")
+        msg.get("score"), msg.get("threshold"), msg.get("ageMs"),
+        preroll=em_listen.decode_preroll(msg.get("preRoll")),
     ):
         log.info(
             f"[{device_id}] on-device wake: "
