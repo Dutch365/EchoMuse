@@ -51,6 +51,7 @@ from urllib.parse import urlsplit
 
 import em_eq
 import em_limiter
+import em_linklog
 import em_mbc
 import em_tasks
 
@@ -947,7 +948,7 @@ class MediaSession:
                 except asyncio.TimeoutError:
                     log.warning(
                         f"[{self.device_id}] Media EOS not delivered within "
-                        f"{EOS_WAIT_S:.0f}s — link stalled or dead; "
+                        f"{EOS_WAIT_S:.0f}s — link stalled or dead{em_linklog.suffix_for(self.device_id)}; "
                         f"releasing the player and leaving it to finish")
                 except BaseException:
                     pass
