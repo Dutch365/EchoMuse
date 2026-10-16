@@ -9,7 +9,7 @@ The published image pin is still upstream 2.26.1. Install with `tools/make_dev_a
 ### Added
 
 - A listen cap of 7 seconds after speech starts, and a trail cutoff when the audio goes quiet or the speech score stays low. A TV that keeps Home Assistant's detector open ends the turn at this cap. Per Dot in Advanced (`maxListenMs`, `trailCutoffMs`, `listenConfidence`). Add-on options `max_listen_ms` (7000), `trail_cutoff_ms` (900) and `listen_confidence` (0.35) are the fleet default. A Dot that overrides Advanced keeps its own sliders.
-- Every failed turn logs a reason code and stores it on the turn. `no_tts` with an empty transcript is `no_stt`. A short tone plays for no transcript and for no spoken reply (`no_reply_cue`, on). The phrase is in the log: "didn't catch that".
+- Every failed turn logs a reason code and stores it on the turn. `no_tts` with an empty transcript is `no_stt`. The didn't-catch-that tone (`no_reply_cue`, on) plays when the turn looks like a request: a clear transcript that names the assistant or follows the action button, or a wake score at or above `cue_wake_score` (0.85). A later wake verifier or speaker match can count too, by setting `addressed`, `speaker_match`, or `wake_verified` on the turn, or by assigning `em_noreply.address_hook`. Chatter, a television, a low score, and no speech stay silent, and the reason code is still logged. `cue_min_words` (2), `cue_min_chars` (8), and `cue_address` set what counts as a clear, directed transcript.
 - When the reply wait (`tts_wait_timeout`, still 30 seconds, ceiling 120) expires, the Echo plays a short fallback tone (`reply_fallback`, on). The log says "no reply from Home Assistant".
 
 ### Fixed

@@ -110,8 +110,34 @@ configuration:
   no_reply_cue:
     name: Didn't-catch-that tone
     description: >-
-      Play a short tone when a turn ends with no transcript or no spoken
-      reply. The log records the reason either way. On by default.
+      Play a short tone when a failed turn looks like a request. A clear
+      transcript that names the assistant, speech after the action button,
+      or a high wake score counts. Background chatter, a television, a low
+      score, and no speech stay silent. The reason code is logged either
+      way. On by default.
+  cue_wake_score:
+    name: Wake score for the tone
+    description: >-
+      A wake at or above this score counts as a real request, so the
+      didn't-catch-that tone may play. 0.85 sits above the score that
+      fires the wake word. A missing score stays silent.
+  cue_min_words:
+    name: Minimum words in a request
+    description: >-
+      A transcript can count as clear from this many words. The default
+      is 2. The wake score can still count on its own.
+  cue_min_chars:
+    name: Minimum letters in a request
+    description: >-
+      A transcript can count as clear from this many letters. The default
+      is 8. The wake score can still count on its own.
+  cue_address:
+    name: Extra names for the assistant
+    description: >-
+      Comma-separated phrases. A clear transcript that contains one of
+      them counts as directed at the assistant. The device's own wake
+      word is always included. Empty adds none. A phrase shorter than
+      three letters is ignored.
   reply_fallback:
     name: Reply timeout tone
     description: >-

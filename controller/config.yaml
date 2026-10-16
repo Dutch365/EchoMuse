@@ -108,8 +108,16 @@ options:
   max_listen_ms: 7000
   trail_cutoff_ms: 900
   listen_confidence: 0.35
-  # A short tone when speech-to-text or the spoken reply is missing.
+  # A short tone when a failed turn looks like a request from the family.
+  # A clear transcript that names the assistant or follows the action
+  # button, or a wake score at or above cue_wake_score. Chatter, a
+  # television, a low score, and no speech stay silent. The reason code
+  # is logged either way.
   no_reply_cue: true
+  cue_wake_score: 0.85
+  cue_min_words: 2
+  cue_min_chars: 8
+  cue_address: ""
   # A short tone when the reply wait above expires.
   reply_fallback: true
   # Second-stage wake check. Empty disables it: nothing is posted and the
@@ -138,6 +146,10 @@ schema:
   trail_cutoff_ms: "int(200,3000)"
   listen_confidence: "float(0,1)"
   no_reply_cue: "bool"
+  cue_wake_score: "float(0,1)"
+  cue_min_words: "int(1,20)"
+  cue_min_chars: "int(1,80)"
+  cue_address: "str?"
   reply_fallback: "bool"
   wake_verify_url: "str"
   wake_verify_timeout_ms: "int(50,2000)"
