@@ -277,3 +277,15 @@ def test_a_private_wake_is_checked_before_the_ack():
     assert finish < ack
     assert "device_clip=" in code
     assert code.index("em_wakeverify.cancel(verify)") > ack
+
+
+def test_every_on_device_wake_logs_its_preroll_length():
+    """An info line, on every oww_wake, with the clip length in milliseconds.
+
+    0 is a wake that brought no clip. The line is how a running Dot shows
+    the buffer arrived, with the checker left off.
+    """
+    src = _sources.def_source("em_controller._on_oww_wake")
+    line = next(l for l in src.splitlines() if "wake pre-roll" in l)
+    assert "log.info" in line
+    assert "preroll_ms" in line

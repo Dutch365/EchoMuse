@@ -511,6 +511,13 @@ def parse_wake(msg: dict, arrived: float) -> dict | None:
     }
 
 
+def preroll_ms(pcm: bytes | None) -> int:
+    """Length of a 16 kHz mono s16le clip, in milliseconds. Absent is 0."""
+    if not pcm:
+        return 0
+    return (len(pcm) // 2) * 1000 // 16000
+
+
 def decode_preroll(value) -> bytes | None:
     """Raw 16 kHz mono s16le from an oww_wake ``preRoll``, or None.
 

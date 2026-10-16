@@ -180,6 +180,14 @@ def test_parse_wake_carries_a_device_clip_and_drops_a_bad_one():
     assert L.decode_preroll(b"\x01\x00") == b"\x01\x00"
 
 
+def test_preroll_length_is_milliseconds_of_16khz_s16le():
+    # 16 samples is one millisecond. 19 wake frames (1.52s) is what the Dot sends.
+    assert L.preroll_ms(None) == 0
+    assert L.preroll_ms(b"") == 0
+    assert L.preroll_ms(b"\x00\x00" * 16) == 1
+    assert L.preroll_ms(b"\x00\x00" * (19 * 1280)) == 1520
+
+
 def test_frame_is_bytes_to_every_other_reader():
     f = L.Frame(b"\x01\x02\x03\x04", 12.5)
     assert f == b"\x01\x02\x03\x04" and isinstance(f, bytes)

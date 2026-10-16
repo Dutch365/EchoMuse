@@ -4822,6 +4822,10 @@ async def _on_oww_shadow_cross(device: Device, msg: dict) -> None:
 
 async def _on_oww_wake(device: Device, msg: dict) -> None:
     device_id = device.device_id
+    # Every on-device wake, including one with no clip. 0ms is an older
+    # firmware, or a crossing the device ring had already dropped.
+    clip = em_listen.decode_preroll(msg.get("preRoll"))
+    log.info(f"[{device_id}] wake pre-roll {em_listen.preroll_ms(clip)}ms")
     if em_wakeverify.classify(
             bool(msg.get("session")), device.listen_view.streams) == "private":
         # A clip on the wake is checked in _private_wake_turn, before
