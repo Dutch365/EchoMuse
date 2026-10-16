@@ -279,6 +279,91 @@ def test_a_private_wake_is_checked_before_the_ack():
     assert code.index("em_wakeverify.cancel(verify)") > ack
 
 
+def test_only_an_explicit_accept_unlocks_a_near_miss():
+    """A timeout that still wakes, and a reject, leave the speech gate closed."""
+    async def accept(url, payload, timeout_s):
+        return 200, {"accept": True}
+
+    async def reject(url, payload, timeout_s):
+        return 200, {"accept": False}
+
+    async def slow(url, payload, timeout_s):
+        raise asyncio.TimeoutError
+
+    async def bad(url, payload, timeout_s):
+        return 200, {"accept": "yes"}
+
+    async def once(post, device_id):
+        task = em_wakeverify.begin(
+            device_id=device_id, score=0.9, rms=0.02, pcm=b"\x00\x00",
+            streaming=True, cfg=_cfg(), post=post)
+        woke = await em_wakeverify.finish(task)
+        return woke, em_wakeverify.consume_accept(device_id)
+
+    async def main():
+        accepted = await once(accept, "kitchen")
+        again = em_wakeverify.consume_accept("kitchen")
+        rejected = await once(reject, "lounge")
+        timed = await once(slow, "hall")
+        fallback = await once(bad, "den")
+        off = em_wakeverify.begin(
+            device_id="off", score=0.9, rms=0.02, pcm=b"\x00\x00",
+            streaming=True, cfg=Settings())
+        return accepted, again, rejected, timed, fallback, off, em_wakeverify.consume_accept("off")
+
+    accepted, again, rejected, timed, fallback, off, off_accept = run(main())
+    assert accepted == (True, True)
+    assert again is False
+    assert rejected == (False, False)
+    assert timed[0] is True and timed[1] is False
+    assert fallback[0] is True and fallback[1] is False
+    assert off is None and off_accept is False
+
+
+def test_bind_turn_clears_the_mark_and_a_button_drops_the_accept():
+    class Dev:
+        device_id = "bind-dev"
+        gate_near_miss = True
+
+    dev = Dev()
+    assert em_wakeverify.bind_turn(dev, True) == ""
+    assert dev.gate_near_miss is False
+
+    em_wakeverify._gen["bind-dev"] = 3
+    em_wakeverify._accept_gen["bind-dev"] = 3
+    dev.gate_near_miss = True
+    assert em_wakeverify.bind_turn(dev, False) == ""
+    assert dev.gate_near_miss is False
+    assert em_wakeverify.consume_accept("bind-dev") is False
+
+
+def test_cancel_drops_an_accept_recorded_for_that_wake():
+    async def hang(url, payload, timeout_s):
+        await asyncio.Event().wait()
+
+    async def main():
+        task = em_wakeverify.begin(
+            device_id="cancel-dev", score=0.9, rms=0.02, pcm=b"\x00\x00",
+            streaming=True, cfg=_cfg(), post=hang)
+        em_wakeverify._accept_gen["cancel-dev"] = em_wakeverify._gen["cancel-dev"]
+        em_wakeverify.cancel(task)
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return task.cancelled(), em_wakeverify.consume_accept("cancel-dev")
+
+    assert run(main()) == (True, False)
+
+
+def test_streaming_wake_is_checked_while_arbitration_holds():
+    code = _sources.code_only(_sources.def_source("em_controller._stream_listen"))
+    begin = code.index("em_wakeverify.begin(")
+    claim = code.index("_claim_wake(")
+    finish = code.index("em_wakeverify.finish(verify)")
+    assert begin < claim < finish
+
+
 def test_every_on_device_wake_logs_its_preroll_length():
     """An info line, on every oww_wake, with the clip length in milliseconds.
 

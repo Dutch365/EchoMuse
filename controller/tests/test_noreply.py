@@ -274,6 +274,48 @@ def test_stamp_records_the_reason_and_play_speaks_only_a_real_request(caplog):
     assert dev.last_real_request is False
 
 
+def test_a_near_miss_with_empty_stt_ends_quietly(caplog):
+    class Dev:
+        device_id = "G090"
+        barge_detected = False
+        last_fail_reason = None
+        last_real_request = False
+        gate_near_miss = True
+        pcm = None
+
+        async def stream_speaker(self, pcm):
+            self.pcm = pcm
+
+    caplog.set_level(logging.INFO, logger="echomuse")
+    dev = Dev()
+    rec = {
+        "outcome": "no_tts", "stt_text": "  ", "wake_score": 0.95,
+        "trigger": "wakeword(0.950)",
+    }
+    nr.stamp(dev, rec)
+    assert rec["gate_near_miss"] is True
+    assert dev.gate_near_miss is False
+    assert rec["fail_reason"] == "no_stt"
+    assert dev.last_real_request is False
+    assert "reason=no_stt" in caplog.text
+    import asyncio
+    asyncio.run(nr.play(dev))
+    assert dev.pcm is None
+    assert "didn't catch that" not in caplog.text
+
+    dev.gate_near_miss = True
+    heard = {
+        "outcome": "no_tts",
+        "stt_text": "hey jarvis what time is it",
+        "wake_score": 0.95,
+        "trigger": "wakeword(0.950)",
+        "wake_model": "hey_jarvis_v0.1",
+    }
+    nr.stamp(dev, heard)
+    assert heard["gate_near_miss"] is True
+    assert dev.last_real_request is True
+
+
 def test_a_stored_decision_is_what_play_uses():
     """cue_kind honours the bool stamp already decided, including a false one."""
     assert nr.cue_kind("no_tts", {"wake_score": 0.99}, real=False) == ""

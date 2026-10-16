@@ -45,8 +45,19 @@ import numpy as np
 log = logging.getLogger("echomuse")
 
 # Silero's usual operating point. Speech measured 0.72-1.00, non-speech
-# 0.02-0.03, so this is not a tight call on the data we have.
+# 0.02-0.03, so this is not a tight call on the data we have. Add-on
+# option speech_gate_threshold, EM_SPEECH_GATE_THRESHOLD, and per-Dot
+# speechGateThreshold move it inside GATE_LO..GATE_HI. 0.5 is the default.
 THRESHOLD = 0.5
+GATE_LO = 0.2
+GATE_HI = 0.8
+
+# A wake the second-stage checker explicitly accepted, whose best Silero
+# score reached this and still sat under the threshold, is sent anyway.
+# Field scores of 0.26-0.47 included real wakes the checker scored 0.83-0.98.
+# Below this the gate still holds: the verifier's accept is not a reason to
+# forward a turn that never sounded like speech.
+NEAR_MISS = 0.25
 
 # Bound on held audio. The no-speech timeout ends a turn after 5s of audio
 # with no speech, so this is only reached if that stops being true; keeping
@@ -63,8 +74,11 @@ CHUNK = 640
 class SpeechGate:
     """Holds a turn's frames until one scores as speech, then passes all."""
 
-    def __init__(self, threshold: float = THRESHOLD, max_hold_s: float = MAX_HOLD_S):
+    def __init__(self, threshold: float = THRESHOLD, max_hold_s: float = MAX_HOLD_S,
+                 near_miss: bool = False):
         self.threshold = threshold
+        self.near_miss = near_miss
+        self.near_miss_sent = False
         self._held: deque[bytes] = deque(maxlen=max(1, int(max_hold_s / FRAME_S)))
         self.open = False
         self.peak = 0.0          # highest probability seen while held
@@ -81,8 +95,15 @@ class SpeechGate:
         if len(self._held) == self._held.maxlen:
             self.dropped += 1
         self._held.append(frame)
-        if prob < self.threshold:
-            return []
+        if prob >= self.threshold:
+            return self._release()
+        if (self.near_miss and NEAR_MISS <= self.peak < self.threshold):
+            self.near_miss_sent = True
+            log.info(f"gate near-miss sent {self.peak:.2f}")
+            return self._release()
+        return []
+
+    def _release(self) -> list[bytes]:
         self.open = True
         self.opened_at = self.frames_seen - 1
         out = list(self._held)
@@ -161,3 +182,64 @@ def new_turn() -> Silero | None:
     """A scorer for one turn, or None if the model is unavailable."""
     sess = _get_session()
     return Silero(sess) if sess is not None else None
+
+
+def clamp_threshold(raw, default: float = THRESHOLD) -> float:
+    """A speech-gate score inside GATE_LO..GATE_HI, or `default`."""
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    if value != value:  # NaN
+        return default
+    return min(GATE_HI, max(GATE_LO, value))
+
+
+def apply(device, config) -> None:
+    """Copy speechGateThreshold onto the device. Registration and a live push."""
+    device.speech_gate_threshold = clamp_threshold(
+        (config or {}).get("speechGateThreshold", THRESHOLD))
+
+
+def threshold_for(device) -> float:
+    return clamp_threshold(getattr(device, "speech_gate_threshold", THRESHOLD))
+
+
+def _env_raw(env, name):
+    if env is None:
+        env = os.environ
+    raw = env.get(name)
+    if raw is None or str(raw).strip() == "":
+        return None
+    return raw
+
+
+def overlay(cfg, env=None):
+    """EM_SPEECH_GATE_THRESHOLD on top of a fleet config dict.
+
+    Unset leaves the stored value. A set value always wins, including one
+    that cannot be parsed: that one is the default, so a bad option cannot
+    freeze a previous score in place.
+    """
+    raw = _env_raw(env, "EM_SPEECH_GATE_THRESHOLD")
+    if raw is None:
+        return cfg
+    out = dict(cfg)
+    out["speechGateThreshold"] = clamp_threshold(raw)
+    return out
+
+
+def gate_for(device, vad):
+    """The turn's gate, or None when Silero itself is unavailable.
+
+    The verifier's explicit accept is consumed either way, so a turn that
+    streams ungated cannot leave it for the next one. `near_miss` is that
+    accept and nothing else: a disabled checker, a timeout, and a reject
+    all leave it false, which is today's hold-until-0.5.
+    """
+    import em_wakeverify
+    device_id = getattr(device, "device_id", "") or ""
+    near = em_wakeverify.consume_accept(device_id)
+    if vad is None:
+        return None
+    return SpeechGate(threshold=threshold_for(device), near_miss=near)
