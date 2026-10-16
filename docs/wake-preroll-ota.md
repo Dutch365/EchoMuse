@@ -6,7 +6,7 @@ The build to try is `server` from this change. The image to put back is the publ
 
 ```bash
 file server server-v2.18.1
-# both: ELF 32-bit LSB executable, ARM, statically linked
+# both: ELF 32-bit LSB shared object, ARM, EABI5, interpreter /system/bin/linker
 strings server | grep -E 'v2\.18\.1-[0-9]+-g[0-9a-f]+'
 strings server-v2.18.1 | grep -F 'v2.18.1'
 ```

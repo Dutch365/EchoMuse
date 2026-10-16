@@ -154,7 +154,10 @@ def test_controller_and_device_announce_the_same_name():
     assert "ble_connect" in ast.literal_eval(features.value)
     go = (CONTROLLER.parent / "device/internal/client/control.go").read_text()
     assert 'const FeatureBleConnect = "ble_connect"' in go
-    assert '"ble_connect"}' in go.split("func capabilities()")[1].split("return caps")[0]
+    # In the static list, ahead of the ambient_light append. Not required to
+    # be last: wake_preroll follows it.
+    caps = go.split("func capabilities()")[1].split("return caps")[0]
+    assert '"ble_connect"' in caps
 
 
 def test_frames_go_only_to_a_device_that_announced_it():
