@@ -2,7 +2,7 @@
 
 ## 2.26.1-dutch365
 
-Based on controller 2.26.1. No database migration and no firmware change. Roll back by installing 2.26.1 again and keeping this add-on's data directory (`addons/data/controller`, including `tls/`).
+Based on controller 2.26.1. No database migration and no firmware change. Roll back by stopping the local add-on and starting `acc06409_controller` again. Its data directory is copied, not moved.
 
 ### Fixed
 
@@ -21,11 +21,18 @@ The published image pin in `config.yaml` is still upstream 2.26.1, which does no
 cd controller && tools/make_dev_addon.sh --keep-slug
 ```
 
-Copy that folder to `/addons/` on the Home Assistant host and reload the store. `--keep-slug` leaves slug `controller`. Supervisor stores the database and the device-link CA at `addons/data/<slug>` (`path_data` in home-assistant/supervisor `addon.py`). The same slug is the same directory, which is what keeps the Dots paired.
+Copy that folder to the local add-ons directory on the Home Assistant host and reload the store. `--keep-slug` leaves `slug: controller`, which Supervisor installs as `local_controller`. The add-on already in use, from `https://github.com/wilbowes/EchoMuse`, is `acc06409_controller` (SHA-1 of that URL, first 8 hex characters). Those are different data directories. Stop the original, then copy before the first start:
 
-Stop the running add-on before starting this one. They share ports 8767, 8770 and 8768. Do not uninstall first: uninstall deletes `addons/data/controller`. If an uninstall cannot be avoided, copy that directory aside and put it back before the first start.
+```bash
+tools/migrate_addon_data.sh copy --data-root /mnt/data/supervisor/addons/data
+tools/migrate_addon_data.sh check --data-root /mnt/data/supervisor/addons/data
+```
 
-Rollback is the same in reverse: stop this build, install controller 2.26.1 with slug `controller`, and leave the data directory in place. This patch does not migrate the database.
+`check` refuses the start when `addons/data/local_controller` has no `echomuse.db` and `tls/`. The add-on exits with the same refusal if it is started empty. A Supervised install uses `/usr/share/hassio/addons/data`. Do not uninstall the original: uninstall deletes `addons/data/acc06409_controller`.
+
+Publishing this fork as its own add-on repository does not reuse `acc06409`. The prefix is the hash of the store URL. `https://github.com/Dutch365/EchoMuse` is `84c6fece_controller`, another empty directory. The copy is required either way.
+
+Rollback: stop `local_controller`, start `acc06409_controller`. `migrate_addon_data.sh rollback` checks the original directory is still intact. This patch does not migrate the database. The two builds share ports 8767, 8770 and 8768.
 
 ## 2.26.1
 

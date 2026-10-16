@@ -15,10 +15,14 @@
 # Usage, from controller/:
 #     tools/make_dev_addon.sh [--keep-slug] [output-dir]
 #
-# --keep-slug leaves slug "controller", which is the upstream add-on's slug.
-# Supervisor stores /data at addons/data/<slug>, so the database and tls/ CA
-# stay and paired Dots keep working. The default slug is controller-dev so a
-# local build can sit beside the released add-on; that one has its own /data.
+# --keep-slug leaves slug "controller". Supervisor still prefixes a local
+# add-on, so the installed name is local_controller and its data directory
+# is addons/data/local_controller. That is not the git add-on's directory
+# (addons/data/acc06409_controller for the wilbowes store URL). The build
+# sets EM_REQUIRE_EXISTING_DATA=1, and em_start refuses to start until
+# echomuse.db and tls/ have been copied in. tools/migrate_addon_data.sh
+# does that copy. The default slug is controller-dev so a local build can
+# sit beside the released add-on; that one has its own empty /data.
 #
 # Then copy the result to /addons/ on the Home Assistant host (the `addons`
 # Samba share, or scp via the SSH add-on) and look in
@@ -83,12 +87,19 @@ text = re.sub(r'(?:^#.*\n)*^image:.*\n', '', text, count=1, flags=re.M)
 
 text = re.sub(r'^version:.*$', f'version: "{version}"', text, count=1, flags=re.M)
 if keep_slug:
-    # Same slug as the released add-on: Supervisor's data directory is
-    # addons/data/<slug>, so the database and the device-link CA stay.
-    # Satellite ports stay on the GA base for the same reason — this build
-    # replaces that add-on, it does not run beside it.
+    # Slug stays "controller", so a local install is local_controller rather
+    # than local_controller-dev, and satellite ports stay on the GA base.
+    # It does not share the git add-on's data directory. The env var makes
+    # em_start refuse an empty /data instead of minting a new CA.
     if not re.search(r'^slug:\s*"controller"\s*$', text, re.M):
-        sys.exit("config.yaml slug is not controller; --keep-slug would not reuse /data")
+        sys.exit('config.yaml slug is not "controller"; --keep-slug expects that slug')
+    if "EM_REQUIRE_EXISTING_DATA" not in text:
+        text = re.sub(
+            r'^(  DB_PATH:.*)$',
+            '\\1\n  # Set only on this local replacement. em_start exits if\n'
+            '  # /data has no database and device-link CA.\n'
+            '  EM_REQUIRE_EXISTING_DATA: "1"',
+            text, count=1, flags=re.M)
 else:
     text = re.sub(r'^name:.*$', 'name: "EchoMuse (dev)"', text, count=1, flags=re.M)
     text = re.sub(r'^slug:.*$', 'slug: "controller-dev"', text, count=1, flags=re.M)
@@ -117,15 +128,24 @@ echo
 echo "Copy it to /addons/ on the Home Assistant host, then reload the store."
 echo
 if [ "$KEEP_SLUG" = 1 ]; then
-    echo "Slug is controller, the same as the released add-on. Supervisor"
-    echo "stores data at addons/data/controller, so the database and tls/"
-    echo "stay and paired Dots keep working."
+    echo "Slug in config.yaml stays controller. Supervisor names a local"
+    echo "add-on local_controller. Its data directory is"
+    echo "addons/data/local_controller, which starts empty. The installed"
+    echo "add-on from the wilbowes store is acc06409_controller, a different"
+    echo "directory. This build refuses to start until that data is copied."
     echo
-    echo "Stop the installed add-on first. Do not uninstall it — uninstall"
-    echo "deletes that data directory. If an uninstall is unavoidable, copy"
-    echo "addons/data/controller aside first and put it back before the"
-    echo "first start of this build. Do not run both at once: they share"
-    echo "ports 8767, 8770 and 8768."
+    echo "On the Home Assistant host, stop the original add-on, then:"
+    echo "  tools/migrate_addon_data.sh copy --data-root /mnt/data/supervisor/addons/data"
+    echo "  tools/migrate_addon_data.sh check --data-root /mnt/data/supervisor/addons/data"
+    echo "Supervised installs use /usr/share/hassio/addons/data. The check"
+    echo "exits non-zero when the target has no echomuse.db and tls/, and"
+    echo "the add-on does the same check at start. Do not start it before"
+    echo "the check passes. Do not run both at once: they share ports"
+    echo "8767, 8770 and 8768. Do not uninstall either one."
+    echo
+    echo "Rollback: stop local_controller and start acc06409_controller."
+    echo "The copy leaves the original directory in place. Confirm with:"
+    echo "  tools/migrate_addon_data.sh rollback --data-root /mnt/data/supervisor/addons/data"
     echo
     echo "Satellite ports stay on the GA base (16001)."
 else
@@ -140,8 +160,9 @@ else
     echo "copy the released add-on's /data (at minimum tls/, all four files)"
     echo "into the dev add-on's /data before starting it."
     echo
-    echo "To replace the released add-on and keep its data, run this script"
-    echo "with --keep-slug."
+    echo "To build the replacement (slug controller, and it will not start"
+    echo "until the installed add-on's data is copied), run this script"
+    echo "with --keep-slug. That still uses a new data directory."
     echo
     echo "Both use host networking and the same ports, so stop one before"
     echo "starting the other."

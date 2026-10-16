@@ -41,30 +41,71 @@ you turn it on per device.
 
 ## Replacing an existing EchoMuse add-on
 
-This build keeps slug `controller`, the same slug as the upstream add-on.
-Home Assistant Supervisor stores each add-on's files at `addons/data/<slug>`
-(the `path_data` property in Supervisor's `addon.py`). The database
-(`echomuse.db`) and the device-link CA (`tls/`) live there. The same slug
-is the same directory, so Dots that are already paired stay paired.
+The add-on installed from the EchoMuse store is `acc06409_controller`.
+Supervisor builds that name as `<repository>_<slug>`. `slug` in
+`config.yaml` is `controller`. For a git store the repository id is the
+first 8 hex characters of SHA-1 of the repository URL, lowercased
+(`get_hash_from_repository` in `supervisor/store/utils.py`).
+`https://github.com/wilbowes/EchoMuse` hashes to `acc06409`.
 
-Stop the add-on before starting the replacement. Both use host networking
-and ports 8767, 8770 and 8768.
+A folder copied to the local add-ons directory is repository `local`, so
+the same `slug: controller` becomes `local_controller`. Supervisor stores
+each add-on's database and device-link CA at `addons/data/<that full name>`
+(`path_data` in `addon.py`). `addons/data/local_controller` is a new
+directory. It is not `addons/data/acc06409_controller`. Starting the local
+add-on while it is empty creates a new database and a new CA. With device
+approval set to strict, every Dot then comes up unpaired.
 
-Uninstall deletes `addons/data/controller`. If you do have to uninstall,
-copy that directory aside first and put it back before the first start of
-the new build. A local folder that keeps the slug is:
+Stop the original add-on. Do not uninstall it. Uninstall deletes
+`addons/data/acc06409_controller`. On the Home Assistant host:
 
 ```bash
 controller/tools/make_dev_addon.sh --keep-slug
+controller/tools/migrate_addon_data.sh copy \
+    --data-root /mnt/data/supervisor/addons/data
+controller/tools/migrate_addon_data.sh check \
+    --data-root /mnt/data/supervisor/addons/data
 ```
 
-The `image:` pin in `config.yaml` names the published upstream image. A
-local add-on drops that pin and builds this tree, which is how this patch
-is installed before an image exists.
+Copy the folder `make_dev_addon.sh` prints into the local add-ons directory
+and reload the store, then install it. The `check` command is the
+pre-flight: it exits non-zero when `addons/data/local_controller` has no
+`echomuse.db` and no `tls/` CA, and it says not to start. The add-on
+itself exits the same way (`EM_REQUIRE_EXISTING_DATA`) if it is started
+anyway. A Supervised install uses `/usr/share/hassio/addons/data` as
+`--data-root`. The Samba `addons` share is the local add-on source, not
+this data root.
 
-This patch does not change the database schema and does not change
-firmware. Rolling back is installing controller 2.26.1 with the same slug
-and the same data directory.
+The two builds share ports 8767, 8770 and 8768. Start the local add-on
+only after the check passes, and only while the original is stopped.
+
+The copy leaves the original directory where it is. Rollback is: stop
+`local_controller`, start `acc06409_controller`.
+
+```bash
+controller/tools/migrate_addon_data.sh rollback \
+    --data-root /mnt/data/supervisor/addons/data
+```
+
+That command checks the original directory is still intact and does not
+move it. This patch does not change the database schema and does not
+change firmware.
+
+The `image:` pin in `config.yaml` names the published upstream image. A
+local add-on drops that pin and builds this tree.
+
+## Publishing the fork does not reuse that data directory
+
+Putting this fork up as its own Home Assistant add-on repository does not
+land on `acc06409_controller`. The prefix is a hash of the repository URL
+Supervisor was given, not of the `slug` field, and `config.yaml` has no
+field that sets it. `https://github.com/Dutch365/EchoMuse` hashes to
+`84c6fece`, so that store's add-on is `84c6fece_controller` with a new
+empty `addons/data/84c6fece_controller`. The same URL with a `.git` suffix
+is a third id (`93341de2`). Letter case does not change the hash;
+Supervisor lowercases the URL first. The only URL that maps to `acc06409`
+is the existing wilbowes store URL. The database and `tls/` still have to
+be copied, the same as for the local add-on.
 
 ## Second-stage wake check
 
