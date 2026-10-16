@@ -88,3 +88,24 @@ configuration:
       silent — no audio and no error, which looks like a deaf Echo. Above
       120 is not accepted, because the ring stops showing that the Echo is
       working at 135 seconds.
+  wake_verify_url:
+    name: Second-stage wake check URL
+    description: >-
+      Optional. Leave empty to disable. When set, a streaming wake is sent
+      here as JSON: device id, score, frame RMS, and about 1.5 seconds of
+      audio (audio_wav_b64). The checker replies with {"accept": true} or
+      {"accept": false}. Private listening is not sent, because that Echo
+      does not stream audio before the wake word. The URL is yours; there
+      is no default host.
+  wake_verify_timeout_ms:
+    name: Wake check timeout (milliseconds)
+    description: >-
+      How long to wait for the checker. 300 is the default. The wait
+      overlaps multi-Echo arbitration. Above 2000 is not accepted.
+  wake_verify_on_error:
+    name: Wake check when the checker does not answer
+    description: >-
+      accept keeps the wake if the checker times out, cannot be reached,
+      or returns something other than {"accept": true/false}. reject drops
+      that wake. The default is accept, so a checker that is down does not
+      silence the house.

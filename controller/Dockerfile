@@ -118,6 +118,7 @@ COPY em_scenes.py .
 COPY em_support.py .
 COPY em_shadow.py .
 COPY em_wake_samples.py .
+COPY em_wakeverify.py .
 COPY em_barge.py .
 COPY em_earlytts.py .
 COPY em_ns.py .
@@ -163,6 +164,7 @@ COPY em_pairing.py .
 COPY em_oww_metadata.py .
 COPY em_oww_warmup.py .
 COPY em_arbiter.py .
+COPY em_micqueue.py .
 COPY em_state.py .
 COPY em_http.py .
 COPY em_events.py .

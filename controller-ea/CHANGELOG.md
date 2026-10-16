@@ -1,5 +1,39 @@
 # Changelog
 
+## 2.26.1-dutch365
+
+Based on controller 2.26.1. No database migration and no firmware change. Roll back by stopping the local add-on and starting `acc06409_controller` again. Its data directory is copied, not moved.
+
+### Fixed
+
+- A backed-up wake queue held about five seconds of microphone audio (64 frames × 80 ms) because a full queue only dropped the oldest frame and therefore stayed full. It now keeps the last half-second, and wake scoring runs on its own threads instead of the pool that also does database work.
+- When two Echoes hear one wake, the louder one answers. Loudness is the speech level above that Echo's noise floor when every claim has a floor, and the level itself otherwise. An exact tie breaks on wake score. A kitchen Echo at −42 dBFS and score 0.94 beats a master Echo at −79 dBFS and score 0.97 that was heard 0.16 s earlier.
+
+### Added
+
+- Optional second-stage wake check, off unless a URL is set. A streaming or shadow wake is posted (about 1.5 s of pre-roll, score, device id, RMS) and the controller waits for `{"accept": true}` or `{"accept": false}`. The wait defaults to 300 ms. A timeout or an error accepts the wake unless the error policy is reject. Private listening is not sent. Add-on options: `wake_verify_url`, `wake_verify_timeout_ms`, `wake_verify_on_error`. The same variables are `WAKE_VERIFY_URL`, `WAKE_VERIFY_TIMEOUT_MS` and `WAKE_VERIFY_ON_ERROR` on the container.
+
+### Install
+
+The published image pin in `config.yaml` is still upstream 2.26.1, which does not contain this patch. Install the local add-on so Supervisor builds this tree:
+
+```bash
+cd controller && tools/make_dev_addon.sh --keep-slug
+```
+
+Copy that folder into `apps/local` on the Home Assistant host (`/mnt/data/supervisor/apps/local`; older Supervisor builds use `addons/local`) and reload the store. `--keep-slug` leaves `slug: controller`, which Supervisor installs as `local_controller`. The app already in use, from `https://github.com/wilbowes/EchoMuse`, is `acc06409_controller`. Its data is `/mnt/data/supervisor/apps/data/acc06409_controller`. The script detects `apps/data` or `addons/data` and `--data-root` overrides that. Stop the original, then from the Advanced SSH app:
+
+```bash
+tools/migrate_addon_data.sh copy
+tools/migrate_addon_data.sh check
+```
+
+`copy` copies the whole data directory, including `oww_models/hey_leo_v6.onnx` and `firmware/`, and sets the original app's boot to `manual` so a reboot does not start both on ports 8767, 8770 and 8768. `check` refuses the start when the target is missing the database, `tls/`, that wake model, or `firmware/`. The app exits with the same refusal if it is started incomplete. Do not uninstall the original: uninstall deletes its data directory.
+
+Publishing this fork as its own app repository does not reuse `acc06409`. The prefix is the hash of the store URL. `https://github.com/Dutch365/EchoMuse` is `84c6fece_controller`, another empty directory.
+
+Rollback: `migrate_addon_data.sh rollback` checks the original directory is intact and sets its boot back to `auto`. Then stop `local_controller` and start `acc06409_controller`. This patch does not migrate the database.
+
 ## 2.26.1
 
 Fixes on top of 2.26.0. Pair with firmware v2.18.1, which this controller offers. No database changes.

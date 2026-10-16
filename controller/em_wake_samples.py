@@ -150,6 +150,10 @@ class WakeCapture:
     def _history_pcm(self) -> bytes:
         return b"".join(self.history)
 
+    def snapshot(self) -> bytes:
+        """Pre-roll currently held: about 1.5s ending at the last frame fed."""
+        return self._history_pcm()
+
     def feed_audio(self, pcm: bytes, now: float | None = None):
         """Add one wire frame. Return a completed candidate when post-roll ends."""
         if not pcm:

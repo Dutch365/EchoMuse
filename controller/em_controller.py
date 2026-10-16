@@ -109,6 +109,8 @@ import em_barge
 import em_listen
 import em_ble_gatt
 import em_wakelevel
+import em_micqueue
+import em_wakeverify
 import em_button
 import em_wakeword
 import em_tap_burst
@@ -3251,7 +3253,8 @@ def _arbitration_hold() -> float:
 async def _claim_wake(device: "Device", heard_at: float | None,
                       level: tuple[float, float] | None = None,
                       by: str = "controller",
-                      over_playback: bool = False) -> str:
+                      over_playback: bool = False,
+                      score: float | None = None) -> str:
     """Claim the utterance for `device`; returns the winner's id.
 
     `level` is the wake's (level, peak) in dBFS. Its level is what the arbiter
@@ -3261,11 +3264,16 @@ async def _claim_wake(device: "Device", heard_at: float | None,
     the reading then contains, so the contest is decided on time.
     """
     hold = _arbitration_hold()
+    floor_db = None
+    if device.noise_floor:
+        floor_db = round(
+            em_wakelevel.dbfs(device.noise_floor) - float(device.mic_gain_db), 1)
     won_by = await em_state.wake_arbiter.contest(
         device.device_id, device.wake_arb_ms / 1000.0,
         heard_at=heard_at, slack_s=_arbitration_slack(), hold_s=hold,
         level=level[0] if level is not None else None,
         gains=device.adc_gains, over_playback=over_playback,
+        score=score, floor_db=floor_db,
     )
     now = asyncio.get_event_loop().time()
     if hold > 0:
@@ -3359,7 +3367,8 @@ async def _private_wake_turn(device: Device, ev: dict) -> None:
     if serves and device.wake_arb_ms > 0 and len(em_state.devices) > 1:
         won_by = await _claim_wake(device, _wake_heard_at(device, ev),
                                    _device_level(ev), by="device",
-                                   over_playback=bool(ev.get("barge")))
+                                   over_playback=bool(ev.get("barge")),
+                                   score=float(score))
     if not serves or won_by != device.device_id:
         wake_info = device.last_wake
         device.last_wake = None
@@ -3502,6 +3511,7 @@ async def _stream_listen(device: Device):
     nm_max     = 0.0  # highest buffered near-miss score
     dead_streak = 0   # consecutive 10s mic_queue timeouts (resets on any frame)
     stray_stopped_at = 0.0  # last mic_stop sent for a stream up with the wake word off
+    verify = None  # second-stage wake check, if one is in flight
     try:
         while True:
             # Now that the model is shared via the module cache (#512), a
@@ -3730,7 +3740,7 @@ async def _stream_listen(device: Device):
                 device.wake_levels.push(rms)
 
                 prediction = await loop.run_in_executor(
-                    None, model.predict, samples
+                    em_micqueue.wake_executor(), model.predict, samples
                 )
                 score = em_oww_models.scalar_score(prediction.get(model_key, 0.0))
                 # Exactly once per chunk the MODEL saw, whatever the score —
@@ -3891,6 +3901,16 @@ async def _stream_listen(device: Device):
                         log.info(f"[{device.device_id}] Wake over a ringing "
                                  f"timer — ring held")
                     if not device.voice_lock.locked():
+                        # Streaming and shadow have pre-roll. The check runs
+                        # during arbitration; a private wake never reaches here.
+                        em_wakeverify.cancel(verify)
+                        verify = em_wakeverify.begin(
+                            device_id=device.device_id,
+                            score=float(score),
+                            rms=rms,
+                            pcm=device.wake_capture.snapshot(),
+                            streaming=device.listen_view.streams,
+                        )
                         # P0-1: do NOT send mic_stop/mic_start_turn.
                         # The stream stays running continuously. Flipping
                         # oww_paused routes subsequent frames to voice_queue.
@@ -3998,7 +4018,8 @@ async def _stream_listen(device: Device):
                             won_by = await _claim_wake(
                                 device, heard_at,
                                 device.wake_levels.measure(device.mic_gain_db),
-                                over_playback=bool(ringing or device.speaking))
+                                over_playback=bool(ringing or device.speaking),
+                                score=float(score))
                         if not serves or won_by != device.device_id:
                             wake_info = device.last_wake
                             device.oww_paused.clear()
@@ -4037,6 +4058,8 @@ async def _stream_listen(device: Device):
                                     device.device_id, "info", "controller",
                                     "Wake heard but no HA connection"
                                 )
+                                em_wakeverify.cancel(verify)
+                                verify = None
                                 await model_reset
                                 continue
                             # The loser is lit: since #263 the device draws
@@ -4059,6 +4082,8 @@ async def _stream_listen(device: Device):
                                 device.device_id, "info", "controller",
                                 f"Wake ceded to {won_by} (arbitration)"
                             )
+                            em_wakeverify.cancel(verify)
+                            verify = None
                             await model_reset
                             continue
 
@@ -4072,6 +4097,11 @@ async def _stream_listen(device: Device):
                         # arbitration: a ceded or HA-less wake `continue`d above
                         # and stays silent. A private-listening wake gets its
                         # sound from listen_ack instead, on the Echo.
+                        if not await em_wakeverify.finish(verify):
+                            verify = None
+                            await _drop_rejected_wake(device, model_reset)
+                            continue
+                        verify = None
                         if getattr(device, "wake_sound", False) and device.wake_cue_capable:
                             await device.play_cue("wake")
                         await _run_voice_locked(device, trigger_label=f"{label}({score:.3f})", is_wakeword=True)
@@ -4114,8 +4144,24 @@ async def _stream_listen(device: Device):
                         warmup.reset()
 
     except asyncio.CancelledError:
+        em_wakeverify.cancel(verify)
         await device.mic_stop()
         raise
+
+
+async def _drop_rejected_wake(device: Device, model_reset) -> None:
+    """The checker refused the wake that won arbitration. Nobody answers."""
+    em_state.wake_arbiter.release(device.device_id)
+    device.oww_paused.clear()
+    device.oww_paused_since = None
+    device.last_wake = None
+    await device.beam_unlock()
+    await leds_off(device)
+    log.info(f"[{device.device_id}] Wake rejected by the second-stage checker")
+    em_dbwriter.submit(
+        db.log_device, device.device_id, "info", "controller",
+        "Wake rejected by the second-stage checker")
+    await model_reset
 
 
 # ─── Button handler ───────────────────────────────────────────────────────────
@@ -4748,6 +4794,11 @@ async def _on_oww_shadow_cross(device: Device, msg: dict) -> None:
 
 async def _on_oww_wake(device: Device, msg: dict) -> None:
     device_id = device.device_id
+    if em_wakeverify.classify(
+            bool(msg.get("session")), device.listen_view.streams) == "private":
+        # The session audio is not fed into the capture ring, so there is
+        # no clip to send. Streaming wakes are checked in the listener.
+        log.debug(f"[{device_id}] wake verify skipped — private listening")
     # On-device scoring crossed the bar AND owwOnDevice is
     # "on", so the device is asking for a turn rather than
     # reporting a measurement. Parked here; the wake listener
@@ -5771,9 +5822,10 @@ async def handle_data(ws: WebSocketServerProtocol, secure: bool = False):
                     continue
                 _now = asyncio.get_event_loop().time()
                 pcm = raw[MIC_HEADER_LEN:]
-                # Keep bounded pre-roll only while capture is enabled. The
-                # capture object owns the ring and post-roll limits.
-                if device.wake_clip_capture or device.wake_capture.active is not None:
+                # Pre-roll for saved clips, and for the second-stage checker
+                # when that URL is set. The ring stays about 1.5s either way.
+                if (device.wake_clip_capture or device.wake_capture.active is not None
+                        or em_wakeverify.settings().enabled):
                     completed = device.wake_capture.feed_audio(pcm)
                     if completed is not None:
                         em_tasks.spawn(_persist_wake_candidate(device, completed)) \
@@ -5785,18 +5837,14 @@ async def handle_data(ws: WebSocketServerProtocol, secure: bool = False):
                     _now if device.mic_gated else device.capture_clock.observe(
                         int.from_bytes(raw[1:3], "big"), _now))
                 q = device.voice_queue if device.oww_paused.is_set() else device.mic_queue
-                try:
-                    q.put_nowait(payload)
-                except asyncio.QueueFull:
-                    # Drop the OLDEST frame, not the newest — keeps the tail of
-                    # the audio contiguous with real time, which is what OWW and
-                    # STT care about. Dropping the newest froze the queue at a
-                    # stale snapshot while fresh speech was discarded.
-                    try:
-                        q.get_nowait()
-                        q.put_nowait(payload)
-                    except (asyncio.QueueEmpty, asyncio.QueueFull):
-                        pass
+                # The wake queue keeps the last half-second once it is backed
+                # up. Dropping one frame at a time left it full, so the
+                # listener scored audio about five seconds old. The voice
+                # queue still drops a single oldest frame, and only when full.
+                em_micqueue.offer(
+                    q, payload,
+                    keep=em_micqueue.KEEP_FRAMES if q is device.mic_queue else None,
+                )
 
             except asyncio.CancelledError:
                 raise
