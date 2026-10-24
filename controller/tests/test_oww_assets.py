@@ -511,6 +511,17 @@ def test_the_connect_reconcile_is_not_gated_on_the_wake_word_mode():
     assert "reconcile_action(" in ast.unparse(fn)
 
 
+def test_no_install_asks_for_a_restart():
+    """The device rebuilds its scorer from a config push, so an install never
+    asks for a restart; the caller that installed sends the push. The
+    dashboard's install said "restart the device" and sent nothing (#1029)."""
+    sync = _sources.code_only(_sources.def_source("em_oww_sync._sync_locked"))
+    assert "restart" not in sync
+    route = _sources.code_only(_sources.def_source("em_routes_oww._post_oww_assets"))
+    assert "em_oww_sync.push_config(" in route, (
+        "the dashboard's install must tell the device to rebuild its scorer")
+
+
 def test_the_reconcile_never_changes_a_devices_mode():
     """Repair, never switch: a device missing its model keeps its mode and
     answers the button until the install lands (Wil, 2026-09-22)."""

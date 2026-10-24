@@ -26,7 +26,11 @@ import em_oww_models
 log = logging.getLogger("echomuse")
 
 # Outcomes that are not failures. Empty is a row that never recorded one.
-_OK = frozenset({"", "ok", "answered", "cancelled", "barged", "superseded"})
+_OK = frozenset({
+    "", "ok", "answered", "cancelled", "barged", "superseded",
+    # HA ended the turn on purpose with nothing to say ("never mind").
+    "silent_reply",
+})
 
 PHRASE = {
     "miss": "didn't catch that",

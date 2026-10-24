@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.26.6
+
+Four controller fixes from upstream, on top of 2.26.5. No firmware change and no schema change.
+
+The published image pin is still upstream 2.26.1. Install with `tools/make_dev_addon.sh --keep-slug`, as for 2.26.5.
+
+### Fixed
+
+- Firmware downloads follow GitHub's redirect. The download answer carries a header longer than aiohttp's default, so the setup wizard's "Install latest from GitHub" and dashboard firmware updates failed before the file arrived (#1021).
+- A wake-word install cut off on the first connect of a newly approved Dot is retried. The approval bounce was landing mid-push and the failed run held a 15-minute debounce, so the Dot had no wake word until that expired (#1029). The dashboard install tells the Dot to rebuild its scorer instead of asking for a restart. The configured model, including hey_leo, is still the only one pushed.
+- "Never mind" and any other turn Home Assistant ends with nothing to say is `silent_reply`. The ring takes a brief solid hold in the scene colour, and the didn't-catch-that tone stays off. A real no-reply still plays that tone (#1005, #1030).
+- aiohttp 3.14.5.
+
 ## 2.26.5
 
 A didn't-catch-that tone left speaking set. Every later wake was closed, the ring went green, and no turn started.

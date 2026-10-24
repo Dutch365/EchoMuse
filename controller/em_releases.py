@@ -31,6 +31,11 @@ from version import offers_ea_firmware as _offers_ea_firmware
 
 log = logging.getLogger("echomuse.api")
 
+# github.com answers an asset download with a 302 whose Content-Security-Policy
+# header is 9,243 bytes (measured 2026-10-24), and aiohttp refuses any header
+# over 8,190 by default, so every download failed before the redirect (#1021).
+DOWNLOAD_MAX_FIELD_SIZE = 64 * 1024
+
 # List endpoint, not /releases/latest: device firmware releases (v* tags with
 # a `server` asset) share the repo with controller releases (controller-v*
 # tags, GHCR image only). /releases/latest returns whichever was published
@@ -502,7 +507,9 @@ async def download(download_url: str,
 
     log.info(f"[api] Fetching binary: {download_url}")
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(
+            max_field_size=DOWNLOAD_MAX_FIELD_SIZE,
+        ) as session:
             async with session.get(
                 download_url,
                 timeout=aiohttp.ClientTimeout(total=120),
