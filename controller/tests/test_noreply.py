@@ -25,6 +25,7 @@ def _reset_address_hook():
     ("cancelled", "x", ""),
     ("barged", "x", ""),
     ("superseded", "", ""),
+    ("silent_reply", "never mind", ""),
     ("", "", ""),
     ("no_tts", "", "no_stt"),
     ("no_tts", "   ", "no_stt"),
