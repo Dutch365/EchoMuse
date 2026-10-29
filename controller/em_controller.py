@@ -3302,7 +3302,7 @@ async def _claim_wake(device: "Device", heard_at: float | None,
             echo_handoff_margin_db=nearest["echo_handoff_margin_db"],
             verify_accept=em_wakeverify.accepted,
             log_path=nearest["log_path"],
-            room=getattr(device, "label", "") or "",
+            room=getattr(device, "label", "") or "", **em_arbiter.contest_switches(nearest),
         )
         em_reliability.note_claim(device, won_by, level_db, floor_db)
     now = asyncio.get_event_loop().time()

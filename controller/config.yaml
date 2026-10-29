@@ -3,7 +3,7 @@ name: "EchoMuse"
 # derives from the controller-v* tag (controller-v2.18.0 -> 2.18.0). Bump
 # both together: Supervisor pulls `image:version`, so a version with no
 # matching tag on GHCR fails to install.
-version: "2.26.9"
+version: "2.26.10"
 # Pull the published multi-arch image rather than building on the user's
 # machine. Without this Supervisor builds from this directory's Dockerfile,
 # which downloads a few hundred MB on whatever the user runs Home Assistant
@@ -138,6 +138,22 @@ options:
   # large handoff margin restore the 2.26.8 handoff.
   arbitration_min_snr_db: 2
   echo_handoff_margin_db: 6
+  # A lone claim leaves at arbitration_early_ms only when its SNR is at
+  # least this and it is not an echo. Below the bar the contest waits out
+  # the hold. Off restores the arrival-based early exit.
+  arbitration_early_snr_gate: true
+  arbitration_early_min_snr_db: 8
+  # After a grant, a late claim at least this many dB clearer takes the
+  # turn until the pipeline starts or this many milliseconds pass.
+  # Off leaves a late claim as a loser.
+  arbitration_takeover: true
+  arbitration_takeover_max_ms: 250
+  arbitration_takeover_margin_db: 6
+  # A second Dot starting the same wake phrase inside this many seconds
+  # waits out Home Assistant's duplicate-wake cooldown. The earlier
+  # pipeline is cancelled when it has no transcript. Off starts immediately.
+  ha_wake_cooldown: true
+  ha_wake_cooldown_s: 2.05
   # Shadow logs a composite wake score beside the loudness winner.
   # off leaves the contest alone. live uses the composite as the winner.
   # The 80 ms early exit and the 250 ms hold stay as they are.
@@ -211,6 +227,13 @@ schema:
   echo_solo_min_score: "float(0,1)"
   arbitration_min_snr_db: "float(0,40)"
   echo_handoff_margin_db: "float(0,80)"
+  arbitration_early_snr_gate: "bool"
+  arbitration_early_min_snr_db: "float(0,80)"
+  arbitration_takeover: "bool"
+  arbitration_takeover_max_ms: "int(0,2000)"
+  arbitration_takeover_margin_db: "float(0,40)"
+  ha_wake_cooldown: "bool"
+  ha_wake_cooldown_s: "float(0,10)"
   arb_score_mode: "list(off|shadow|live)"
   loser_cooldown_mode: "list(off|log|live)"
   loser_cooldown_s: "int(5,10)"

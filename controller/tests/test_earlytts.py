@@ -307,7 +307,10 @@ def test_tts_end_does_not_replace_a_url_already_playing():
 def test_an_ha_error_ends_an_early_stream():
     branch = _branch(_function("_handle_voice_event"), "ERROR")
     body = ast.Module(body=branch.body, type_ignores=[])
-    assert _calls(body, "self._tts_abort.set"), (
+    assert _calls(body, "em_arbiter.note_pipeline_error"), (
+        "an HA ERROR no longer reaches the pipeline-error path")
+    _, fn = _sources.find_def("em_arbiter.note_pipeline_error")
+    assert _calls(fn, "satellite._tts_abort.set"), (
         "an HA ERROR no longer aborts an early TTS fetch; HA never closes it, "
         "so the fetch would sit out its 60s read timeout"
     )

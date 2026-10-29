@@ -144,6 +144,15 @@ DEFAULT_ECHO_SOLO_MIN = 0.85
 # very large handoff margin are the 2.26.8 handoff.
 DEFAULT_MIN_SNR_DB = 2.0
 DEFAULT_ECHO_HANDOFF_MARGIN_DB = 6.0
+# A lone claim leaves at the early mark only at this SNR, and only when it
+# is not an echo. Below the bar the contest waits out the hold. 0 with the
+# gate off is the arrival-based early exit from 2.26.9.
+DEFAULT_EARLY_MIN_SNR_DB = 8.0
+DEFAULT_TAKEOVER_MAX_S = 0.25
+DEFAULT_TAKEOVER_MARGIN_DB = 6.0
+# Home Assistant drops a second pipeline for the same phrase inside 2 s
+# (WAKE_WORD_COOLDOWN). 2.05 clears that edge.
+DEFAULT_HA_WAKE_COOLDOWN_S = 2.05
 DEFAULT_LOG = "/share/leo/logs/wake-arbitration.jsonl"
 
 # (entries, loudness_winner) -> device id, or None to keep the loudness winner.
@@ -228,6 +237,18 @@ def arbitration_mode(env=None) -> str:
     return "shadow"
 
 
+def _bool_opt(raw, default: bool) -> bool:
+    """Missing or blank keeps `default`. 0/false/off is off; 1/true/on is on."""
+    if raw is None or str(raw).strip() == "":
+        return default
+    text = str(raw).strip().lower()
+    if text in ("0", "false", "off", "no"):
+        return False
+    if text in ("1", "true", "on", "yes"):
+        return True
+    return default
+
+
 def _float_opt(raw, default, lo, hi):
     if raw is None or str(raw).strip() == "":
         return default
@@ -278,8 +299,40 @@ def nearest_settings(env=None) -> dict:
         "echo_handoff_margin_db": _float_opt(
             raw.get("EM_ECHO_HANDOFF_MARGIN_DB"),
             DEFAULT_ECHO_HANDOFF_MARGIN_DB, 0, 80),
+        "early_snr_gate": _bool_opt(raw.get("EM_ARBITRATION_EARLY_SNR_GATE"), True),
+        "early_min_snr_db": _float_opt(
+            raw.get("EM_ARBITRATION_EARLY_MIN_SNR_DB"),
+            DEFAULT_EARLY_MIN_SNR_DB, 0, 80),
+        "takeover": _bool_opt(raw.get("EM_ARBITRATION_TAKEOVER"), True),
+        "takeover_max_s": _float_opt(
+            raw.get("EM_ARBITRATION_TAKEOVER_MAX_MS"), 250, 0, 2000) / 1000.0,
+        "takeover_margin_db": _float_opt(
+            raw.get("EM_ARBITRATION_TAKEOVER_MARGIN_DB"),
+            DEFAULT_TAKEOVER_MARGIN_DB, 0, 40),
+        "ha_wake_cooldown": _bool_opt(raw.get("EM_HA_WAKE_COOLDOWN"), True),
+        "ha_wake_cooldown_s": _float_opt(
+            raw.get("EM_HA_WAKE_COOLDOWN_S"),
+            DEFAULT_HA_WAKE_COOLDOWN_S, 0, 10),
         "log_path": str(raw.get("EM_WAKE_ARBITRATION_LOG", DEFAULT_LOG) or ""),
     }
+
+
+def close_reason_for(heard: float, arrived: float, hold_s: float,
+                     min_wait_s: float, cap_s: float | None, close: float,
+                     early: bool) -> str:
+    """Why the contest stopped waiting: early, hold, min_wait, or cap."""
+    if early:
+        return "early"
+    hold_at = heard + hold_s
+    wait_at = arrived + min_wait_s
+    if cap_s is not None and cap_s > 0:
+        cap_at = arrived + cap_s
+        if close <= cap_at + 1e-9 and cap_at <= max(hold_at, wait_at) + 1e-9:
+            if abs(close - cap_at) <= 1e-6:
+                return "cap"
+    if hold_at + 1e-9 >= wait_at:
+        return "hold"
+    return "min_wait"
 
 
 def nearest_close(heard: float, arrived: float, hold_s: float,
@@ -415,7 +468,9 @@ def decision_record(contest_id: int, claims: list, winner: str | None,
                     reason: str, opened_heard: float, opened_arrived: float,
                     hold_s: float, min_wait_s: float, cap_s: float | None,
                     decided_at: float, offsets: dict | None = None,
-                    echo_margin_db: float = DEFAULT_ECHO_MARGIN_DB) -> dict:
+                    echo_margin_db: float = DEFAULT_ECHO_MARGIN_DB,
+                    early_exit: bool = False,
+                    close_reason: str | None = None) -> dict:
     """One contest, as the JSON line the log stores."""
     offsets = offsets or {}
     use_snr = claims and all(c.level is not None and c.floor_db is not None for c in claims)
@@ -456,7 +511,142 @@ def decision_record(contest_id: int, claims: list, winner: str | None,
         },
         "decided_at": decided_at,
         "wall_time": time.time(),
+        "early_exit": bool(early_exit),
+        "close_reason": close_reason,
     }
+
+
+class HaWakeCooldown:
+    """Last Home Assistant pipeline start for each wake phrase.
+
+    A second Dot inside `cooldown_s` waits, and the earlier pipeline is
+    cancelled when it has not produced a transcript. `enabled` false skips it.
+    """
+
+    def __init__(self) -> None:
+        self._by_phrase: dict = {}
+
+    def reset(self) -> None:
+        self._by_phrase.clear()
+
+    def note_start(self, phrase: str, device_id: str, now: float) -> None:
+        if not phrase:
+            return
+        self._by_phrase[phrase] = {"device": device_id, "started": now, "stt": False}
+
+    def note_stt(self, phrase: str, device_id: str) -> None:
+        row = self._by_phrase.get(phrase)
+        if row is not None and row["device"] == device_id:
+            row["stt"] = True
+
+    def plan(self, phrase: str, device_id: str, now: float, cooldown_s: float,
+             enabled: bool = True) -> dict:
+        if not enabled or not phrase or cooldown_s <= 0:
+            return {"wait_s": 0.0, "cancel": None}
+        row = self._by_phrase.get(phrase)
+        if row is None or row["device"] == device_id:
+            return {"wait_s": 0.0, "cancel": None}
+        remain = cooldown_s - (now - row["started"])
+        if remain <= 0:
+            return {"wait_s": 0.0, "cancel": None}
+        return {"wait_s": remain, "cancel": None if row["stt"] else row["device"]}
+
+    def on_duplicate(self, phrase: str, now: float, cooldown_s: float) -> float:
+        """Seconds to wait before retrying a duplicate_wake_up_detected start."""
+        row = self._by_phrase.get(phrase)
+        if row is None:
+            return 0.0
+        return max(0.0, cooldown_s - (now - row["started"]))
+
+
+def buffer_allows(qsize: int, maxsize: int, wait_s: float, frame_s: float = 0.08) -> bool:
+    """False when the mic queue would fill before the cooldown wait ends."""
+    if maxsize <= 0 or wait_s <= 0:
+        return True
+    incoming = int(wait_s / frame_s) + 1
+    return qsize + incoming <= maxsize
+
+
+ha_cooldown = HaWakeCooldown()
+
+
+def contest_switches(settings: dict) -> dict:
+    """Kwargs contest() reads for the hold gate, the takeover, and nothing else."""
+    keys = (
+        "early_snr_gate", "early_min_snr_db", "takeover",
+        "takeover_max_s", "takeover_margin_db",
+    )
+    return {key: settings[key] for key in keys}
+
+
+def note_pipeline_error(satellite, data: dict) -> None:
+    """Home Assistant pipeline error. A duplicate wake is retried once."""
+    code = data.get("code", "")
+    message = data.get("message", "")
+    log.warning(f"[{satellite._log_name}] Pipeline error: {code} — {message}")
+    if (code == "duplicate_wake_up_detected"
+            and not getattr(satellite, "_duplicate_retried", False)
+            and nearest_settings()["ha_wake_cooldown"]):
+        satellite._duplicate_retried = True
+        satellite._duplicate_retry = True
+    satellite._pipeline_error = True
+    satellite._ha_audio_closed = True
+    satellite._ha_vad_end.set()
+    satellite._tts_event.set()
+    satellite._tts_abort.set()
+
+
+async def guard_ha_start(device, phrase: str, cancel_turn) -> bool:
+    """Wait out HA's per-phrase cooldown, then mark the pipeline as started.
+
+    False: the mic queue cannot hold the wait. The turn logs ha_cooldown
+    and does not call Home Assistant. Frames already queued stay queued.
+    """
+    import em_state
+    settings = nearest_settings()
+    if phrase and settings["ha_wake_cooldown"]:
+        now = time.monotonic()
+        plan = ha_cooldown.plan(
+            phrase, device.device_id, now, settings["ha_wake_cooldown_s"], True)
+        wait_s = plan["wait_s"]
+        if wait_s > 0 and not buffer_allows(
+                device.voice_queue.qsize(), device.voice_queue.maxsize, wait_s):
+            log.info("[%s] reason=ha_cooldown — mic buffer cannot hold %.0fms",
+                     device.device_id, wait_s * 1000)
+            device.last_turn_outcome = "ha_cooldown"
+            return False
+        if plan["cancel"]:
+            cancel_turn(plan["cancel"], abort_ha=True, reason="ha_cooldown")
+        if wait_s > 0:
+            log.info("[%s] waiting %.0fms for HA wake cooldown on %r",
+                     device.device_id, wait_s * 1000, phrase)
+            await asyncio.sleep(wait_s)
+        ha_cooldown.note_start(phrase, device.device_id, time.monotonic())
+    em_state.wake_arbiter.mark_pipeline_started()
+    return True
+
+
+async def after_ha_start(device, satellite, phrase, trace, run_turn,
+                         preroll_discard, on_thinking, post_turn_play) -> None:
+    """Retry once on duplicate_wake_up_detected, or record that STT arrived."""
+    if phrase and getattr(satellite, "_duplicate_retry", False):
+        settings = nearest_settings()
+        delay = ha_cooldown.on_duplicate(
+            phrase, time.monotonic(), settings["ha_wake_cooldown_s"])
+        log.info("[%s] reason=ha_cooldown duplicate wake; retrying in %.0fms",
+                 device.device_id, delay * 1000)
+        if delay > 0:
+            await asyncio.sleep(delay)
+        satellite._duplicate_retry = False
+        ha_cooldown.note_start(phrase, device.device_id, time.monotonic())
+        await run_turn(
+            device=device, preroll_discard=preroll_discard,
+            on_thinking=on_thinking, post_turn_play=post_turn_play,
+            trace=trace, wake_word_phrase=phrase)
+        return
+    text = "" if trace is None else (trace.stt_text or "")
+    if phrase and text.strip():
+        ha_cooldown.note_stt(phrase, device.device_id)
 
 
 def append_decision(record: dict, path: str | None) -> None:
@@ -498,6 +688,19 @@ class WakeArbiter:
         self.last_nearest: tuple | None = None
         self.last_record: dict | None = None
         self._seq: int = 0
+        self._close_meta = {"early_exit": False, "close_reason": None}
+        self._takeover_until = 0.0
+        self._takeover_event: asyncio.Event | None = None
+        self._takeover_claim: Claim | None = None
+        self._granted_claim: Claim | None = None
+        self._first_heard = 0.0
+        self._pipeline_started = False
+        self._takeover_on = False
+        self._takeover_margin = DEFAULT_TAKEOVER_MARGIN_DB
+        self._takeover_cap: float | None = None
+        self._takeover_offsets: dict = {}
+        self._takeover_echo_margin = DEFAULT_ECHO_MARGIN_DB
+        self._takeover_log: str | None = None
 
     def claim(self, device_id: str, window_s: float,
               heard_at: float | None = None, slack_s: float = 0.0) -> str:
@@ -550,7 +753,12 @@ class WakeArbiter:
                       echo_handoff_margin_db: float = DEFAULT_ECHO_HANDOFF_MARGIN_DB,
                       verify_accept=None,
                       log_path: str | None = None,
-                      room: str = "") -> str:
+                      room: str = "",
+                      early_snr_gate: bool = True,
+                      early_min_snr_db: float = DEFAULT_EARLY_MIN_SNR_DB,
+                      takeover: bool = True,
+                      takeover_max_s: float = DEFAULT_TAKEOVER_MAX_S,
+                      takeover_margin_db: float = DEFAULT_TAKEOVER_MARGIN_DB) -> str:
         """
         claim(), held so that every Echo that heard the utterance is counted
         and `pick()` chooses the loudest, or failing a usable level the one
@@ -586,9 +794,9 @@ class WakeArbiter:
         if (self._winner is not None and self._winner != device_id
                 and abs(heard - self._heard_at) < window_s
                 and now - self._heard_at < window_s + max(0.0, slack_s)):
-            if mode in ("nearest", "shadow"):
-                self._log_late(fresh, window_s, mode, offsets, echo_margin_db, log_path)
-            return self._winner
+            return self._late_claim(
+                fresh, window_s, mode, offsets, echo_margin_db, log_path,
+                cap_s, takeover_margin_db)
 
         entries = [fresh]
         decided: asyncio.Future = loop.create_future()
@@ -599,7 +807,8 @@ class WakeArbiter:
             # the rest of the hold open for anyone else inside the window.
             if mode == "nearest":
                 await self._wait_nearest(
-                    heard, now, hold_s, min_wait_s, cap_s, early_s, entries, loop)
+                    heard, now, hold_s, min_wait_s, cap_s, early_s, entries, loop,
+                    early_snr_gate, early_min_snr_db, offsets, echo_margin_db)
             else:
                 limit = hold_s
                 if early_s is not None and early_s > 0:
@@ -645,27 +854,145 @@ class WakeArbiter:
                     self._seq, self.last_entries,
                     winner if mode == "nearest" else near_id,
                     why, heard, now, hold_s, min_wait_s, cap_s, loop.time(),
-                    offsets, echo_margin_db)
+                    offsets, echo_margin_db,
+                    early_exit=self._close_meta.get("early_exit", False),
+                    close_reason=self._close_meta.get("close_reason"))
                 if mode == "shadow":
                     record["applied_winner"] = winner
                     record["applied_reason"] = legacy_why
                 self.last_record = record
                 append_decision(record, log_path)
+            if (mode == "nearest" and takeover and takeover_max_s > 0
+                    and winner and won is not None):
+                self._arm_takeover(
+                    loop.time() + takeover_max_s, won, cap_s, offsets,
+                    echo_margin_db, takeover_margin_db, log_path, heard)
+                await self._takeover_window()
+                if self._takeover_claim is not None:
+                    winner = self._takeover_claim.device_id
+                    self._winner = winner
+                    self._heard_at = self._takeover_claim.heard
+                    self.last_why = "takeover"
             if not decided.done():
                 decided.set_result(winner)
         return winner
 
+    def _arm_takeover(self, until, won, cap_s, offsets, echo_margin_db,
+                      margin, log_path, first_heard) -> None:
+        self._takeover_on = True
+        self._takeover_until = until
+        self._takeover_claim = None
+        self._granted_claim = won
+        self._takeover_cap = cap_s
+        self._takeover_offsets = offsets or {}
+        self._takeover_echo_margin = echo_margin_db
+        self._takeover_margin = margin
+        self._takeover_log = log_path
+        self._first_heard = first_heard
+        self._pipeline_started = False
+        self._takeover_event = asyncio.Event()
+
+    async def _takeover_window(self) -> None:
+        """Hold the grant until a clearer claim, the pipeline, or the cap."""
+        event = self._takeover_event
+        if event is None:
+            return
+        loop = asyncio.get_running_loop()
+        timeout = max(0.0, self._takeover_until - loop.time())
+        try:
+            await asyncio.wait_for(event.wait(), timeout)
+        except asyncio.TimeoutError:
+            pass
+        self._takeover_event = None
+        self._takeover_on = False
+
+    def mark_pipeline_started(self) -> None:
+        """The winner's Home Assistant pipeline has started. Late claims stay losers."""
+        self._pipeline_started = True
+        event = self._takeover_event
+        if event is not None and not event.is_set():
+            event.set()
+
+    def _late_claim(self, fresh: Claim, window_s: float, mode: str,
+                    offsets, echo_margin_db: float, log_path: str | None,
+                    cap_s: float | None, margin: float) -> str:
+        """A claim after the grant. A much clearer one can still take the turn."""
+        if self._accept_takeover(fresh, cap_s, window_s, margin, offsets, echo_margin_db):
+            self._seq += 1
+            both = [c for c in (self._granted_claim, fresh) if c is not None]
+            record = decision_record(
+                self._seq, both, fresh.device_id, "takeover",
+                self._first_heard, fresh.arrived or fresh.heard,
+                0.0, 0.0, cap_s, fresh.arrived or fresh.heard,
+                offsets, echo_margin_db, early_exit=False, close_reason="takeover")
+            record["replaced"] = self._winner
+            self.last_record = record
+            self.last_why = "takeover"
+            append_decision(record, log_path or self._takeover_log)
+            self._takeover_claim = fresh
+            self._winner = fresh.device_id
+            self._heard_at = fresh.heard
+            event = self._takeover_event
+            if event is not None and not event.is_set():
+                event.set()
+            return fresh.device_id
+        if mode in ("nearest", "shadow"):
+            self._log_late(fresh, window_s, mode, offsets, echo_margin_db, log_path)
+        return self._winner
+
+    def _accept_takeover(self, fresh: Claim, cap_s, window_s, margin,
+                         offsets, echo_margin_db) -> bool:
+        if not self._takeover_on or self._pipeline_started:
+            return False
+        if self._takeover_event is None:
+            return False
+        span = cap_s if cap_s is not None else window_s
+        if abs(fresh.heard - self._first_heard) > span:
+            return False
+        if _suspect(fresh, echo_margin_db):
+            return False
+        granted = self._granted_claim
+        if granted is None:
+            return False
+        late = _adj_snr(fresh, offsets or {})
+        prior = _adj_snr(granted, offsets or {})
+        if late is None or prior is None:
+            return False
+        return late - prior >= margin
+
     async def _wait_nearest(self, heard, now, hold_s, min_wait_s, cap_s,
-                            early_s, entries, loop) -> None:
-        """Arrival-aware hold. A low-lag lone claim may leave at early_s."""
+                            early_s, entries, loop, early_snr_gate,
+                            early_min_snr_db, offsets, echo_margin_db) -> None:
+        """A lone claim leaves early only when it is clearly the near one.
+
+        The early mark is heard + early_s. Below early_min_snr_db, or when
+        the claim is an echo, the contest waits until `close`.
+        """
         lag = now - heard
         close = nearest_close(heard, now, hold_s, min_wait_s, cap_s)
-        if early_s is not None and early_s > 0 and lag < EARLY_LAG_S:
-            early_at = min(now + early_s, close)
-            await asyncio.sleep(max(0.0, early_at - now))
+        lone = entries[0]
+        snr = _adj_snr(lone, offsets or {})
+        suspect = _suspect(lone, echo_margin_db) if lone.level is not None else False
+        confident = (
+            (not early_snr_gate)
+            or (snr is not None and snr >= early_min_snr_db and not suspect))
+        if early_s is not None and early_s > 0 and lag < EARLY_LAG_S and confident:
+            if early_snr_gate:
+                early_at = heard + early_s
+            else:
+                # Gate off: the 2.26.9 exit, measured from arrival.
+                early_at = now + early_s
+            early_at = min(early_at, close)
+            await asyncio.sleep(max(0.0, early_at - loop.time()))
             if len(entries) < 2:
+                self._close_meta = {"early_exit": True, "close_reason": "early"}
                 return
         await asyncio.sleep(max(0.0, close - loop.time()))
+        self._close_meta = {
+            "early_exit": False,
+            "close_reason": close_reason_for(
+                heard, now, hold_s, min_wait_s, cap_s, close, False),
+        }
 
     def _log_late(self, claim: Claim, window_s: float, mode: str,
                   offsets, echo_margin_db: float, log_path: str | None) -> None:
