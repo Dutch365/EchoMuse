@@ -135,6 +135,16 @@ options:
   # then. A second claim inside that window keeps the 250ms hold, so a
   # louder Echo still in the old window wins. 0 waits out the whole hold.
   arbitration_early_ms: 80
+  # shadow logs the nearest-Dot winner and still grants today's winner.
+  # nearest waits for a late claim and grants the calibrated loudest Dot.
+  # legacy is the 250 ms hold with no nearest log. Roll back with legacy.
+  arbitration_mode: "shadow"
+  arbitration_hold_ms: 350
+  arbitration_min_wait_ms: 150
+  arbitration_cap_ms: 600
+  arbitration_room_offsets_db: ""
+  echo_margin_db: 6
+  echo_solo_min_score: 0.85
   # Shadow logs a composite wake score beside the loudness winner.
   # off leaves the contest alone. live uses the composite as the winner.
   # The 80 ms early exit and the 250 ms hold stay as they are.
@@ -199,6 +209,13 @@ schema:
   speech_gate_threshold: "float(0.2,0.8)"
   loop_watchdog: "bool"
   arbitration_early_ms: "int(0,250)"
+  arbitration_mode: "list(legacy|shadow|nearest)"
+  arbitration_hold_ms: "int(0,2000)"
+  arbitration_min_wait_ms: "int(0,2000)"
+  arbitration_cap_ms: "int(50,5000)"
+  arbitration_room_offsets_db: "str?"
+  echo_margin_db: "float(0,40)"
+  echo_solo_min_score: "float(0,1)"
   arb_score_mode: "list(off|shadow|live)"
   loser_cooldown_mode: "list(off|log|live)"
   loser_cooldown_s: "int(5,10)"

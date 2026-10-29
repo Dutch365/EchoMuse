@@ -117,8 +117,26 @@ def adaptive_enabled(env=None) -> bool:
     return _raw(env, "EM_ADAPTIVE_ENDPOINT").lower() in ("1", "true", "yes", "on")
 
 
+def nearest_cooldown(env=None) -> bool:
+    """Nearest mode enforces the loser cooldown instead of logging it."""
+    return em_arbiter.arbitration_mode(env) == "nearest"
+
+
 def cooldown_s(env=None) -> float:
     return float(_clamp_int(_raw(env, "EM_LOSER_COOLDOWN_S"), 7, 5, 10))
+
+
+def cooldown_window(env=None) -> float:
+    """Seconds a loser stays quiet. Nearest mode uses 3s and enforces it."""
+    if nearest_cooldown(env):
+        return 3.0
+    return cooldown_s(env)
+
+
+def effective_cool_mode(env=None) -> str:
+    if nearest_cooldown(env):
+        return "live"
+    return cool_mode(env)
 
 
 def override_wake(env=None) -> float:
@@ -227,7 +245,7 @@ def contest_hook(entries, winner: str):
     if mode == "off":
         return None
     if cool_mode() != "off":
-        record_losers(entries, winner, _now(), cooldown_s())
+        record_losers(entries, winner, _now(), cooldown_window())
     if len(entries) < 2:
         return None
     report = evaluate(entries, winner)
@@ -256,7 +274,7 @@ def cooldown_action(device_id: str, score, now: float, accept: bool,
     `suppress` is live mode. `would_suppress` is log mode. A score at or
     above the override with an explicit verifier accept is `override`.
     """
-    mode = cool_mode() if mode is None else mode
+    mode = effective_cool_mode() if mode is None else mode
     if mode == "off":
         return "allow"
     override = override_wake() if override is None else override
@@ -284,7 +302,7 @@ async def should_drop(device_id: str, score, env=None, now=None,
     in-flight checker only in live mode, and only long enough for that
     check; a missing answer is not an accept.
     """
-    mode = cool_mode(env)
+    mode = effective_cool_mode(env)
     if mode == "off":
         return False
     if now is None:
@@ -318,8 +336,8 @@ def note_claim(device, won_by: str, level_db, floor_db, env=None) -> None:
         device.early_snr_db = level_db - floor_db
     else:
         device.early_snr_db = None
-    if won_by != device.device_id and cool_mode(env) != "off":
-        _cool[device.device_id] = (_now() + cooldown_s(env), won_by)
+    if won_by != device.device_id and effective_cool_mode(env) != "off":
+        _cool[device.device_id] = (_now() + cooldown_window(env), won_by)
     prime_external(device.device_id, level_db, env)
 
 
