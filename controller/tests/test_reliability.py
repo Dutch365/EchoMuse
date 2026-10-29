@@ -81,7 +81,7 @@ def test_garbage_env_keeps_the_defaults():
 def test_addon_options_use_those_defaults():
     cfg = yaml.safe_load((CONTROLLER / "config.yaml").read_text())
     opt = cfg["options"]
-    assert cfg["version"] == "2.26.6"
+    assert cfg["version"] == "2.26.7"
     assert opt["arb_score_mode"] == "shadow"
     assert opt["loser_cooldown_mode"] == "log"
     assert opt["loser_cooldown_s"] == 7
@@ -92,7 +92,7 @@ def test_addon_options_use_those_defaults():
     assert opt["adaptive_endpoint"] is False
     assert opt["adaptive_no_speech_ms"] == 3000
     assert opt["adaptive_vad_step"] == 1
-    assert "## 2.26.6" in (CONTROLLER / "CHANGELOG.md").read_text()
+    assert "## 2.26.7" in (CONTROLLER / "CHANGELOG.md").read_text()
 
 
 def test_replay_1039_kitchen_wins_and_the_loser_is_logged_four_seconds_later():

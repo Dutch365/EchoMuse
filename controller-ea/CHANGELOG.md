@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.26.7
+
+A quiet Dot's question was cut off by Home Assistant's speech detector. The gaps between words spent its silence budget, and the controller stopped the microphone when that end arrived.
+
+The published image pin is still upstream 2.26.1. Install with `tools/make_dev_addon.sh --keep-slug`, as for 2.26.6.
+
+### Fixed
+
+- The voice request now carries Home Assistant audio settings: auto gain 31 dBFS and a volume multiplier of 2, so the speech detector scores the Dot's audio higher.
+- An early Home Assistant end of speech is held until this controller's own speech gate has been quiet for 1 second. A closed transcript, a pipeline error, or 15 seconds from the start of speech still stops the microphone.
+
 ## 2.26.6
 
 Four controller fixes from upstream, on top of 2.26.5. No firmware change and no schema change.

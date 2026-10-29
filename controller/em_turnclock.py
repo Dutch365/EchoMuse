@@ -255,12 +255,56 @@ def listen_cap_verdict(now, speech_started_at, last_confident_at,
     return False, ""
 
 
-def endpoint_verdict(now, speech_seen, ha_vad_started, clock, device):
-    """Listen cap and trail first, then HA's VAD having failed to start."""
+# HA's segmenter subtracts every sub-0.5 chunk from a 0.7s silence budget and
+# only refills that budget after a full second of uninterrupted speech. On a
+# quiet Dot the gaps between words spend the budget, and STT_VAD_END arrives
+# while the person is still talking (kitchen, 2026-10-28: cut at 6.0s of
+# audio, no pause). Hold that end until our own gate has also been quiet, and
+# never past HA's own 15s cap.
+HA_VAD_QUIET_S = 1.0
+HA_VAD_HOLD_CAP_S = 15.0
+
+
+def honor_ha_vad_end(now, speech_started_at, last_heard_at,
+                     quiet_s=HA_VAD_QUIET_S, hard_cap_s=HA_VAD_HOLD_CAP_S):
+    """Should an HA STT_VAD_END stop the mic?
+
+    All times are monotonic seconds from the same clock. `last_heard_at` is
+    when the controller's own gate last heard speech (Silero confidence, or
+    the RMS speech mark when the model is absent).
+
+    No speech of ours yet: nothing to disagree with, so HA wins. Otherwise
+    HA wins once the gate has been quiet for `quiet_s`, or once `hard_cap_s`
+    has passed since speech started — a turn must not stream forever because
+    HA already closed its side and our gate never went quiet.
+
+    Returns (honor, reason); reason is "" when honor is False.
+    """
+    if speech_started_at is None or last_heard_at is None:
+        return True, "HA VAD end — controller gate has not heard speech"
+    if now - speech_started_at >= hard_cap_s:
+        return True, (
+            f"HA VAD end — hard cap {hard_cap_s:.0f}s "
+            f"(controller gate still hearing speech)"
+        )
+    quiet = now - last_heard_at
+    if quiet >= quiet_s:
+        return True, f"HA VAD end — controller gate quiet {quiet:.1f}s"
+    return False, ""
+
+
+def endpoint_verdict(now, speech_seen, ha_vad_started, clock, device,
+                     max_listen_s=None, trail_cutoff_s=None):
+    """Listen cap and trail first, then HA's VAD having failed to start.
+
+    The two overrides exist for one caller: while an early HA end is being
+    held, the 7s listen cap must not cut the turn the hold is keeping open,
+    and the trail matches the hold's own quiet interval.
+    """
     end, why = listen_cap_verdict(
         now, clock.speech_started_at, clock.last_confident_at,
-        getattr(device, "max_listen_s", MAX_LISTEN_S),
-        getattr(device, "trail_cutoff_s", TRAIL_CUTOFF_S),
+        getattr(device, "max_listen_s", MAX_LISTEN_S) if max_listen_s is None else max_listen_s,
+        getattr(device, "trail_cutoff_s", TRAIL_CUTOFF_S) if trail_cutoff_s is None else trail_cutoff_s,
     )
     if end:
         return True, why
