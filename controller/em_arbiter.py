@@ -139,6 +139,11 @@ DEFAULT_MIN_WAIT_S = 0.15
 DEFAULT_CAP_S = 0.60
 DEFAULT_ECHO_MARGIN_DB = 6.0
 DEFAULT_ECHO_SOLO_MIN = 0.85
+# A clean claim takes an echo-flagged louder Dot only at this SNR, or when
+# its level is within DEFAULT_ECHO_HANDOFF_MARGIN_DB of that Dot. 0 and a
+# very large handoff margin are the 2.26.8 handoff.
+DEFAULT_MIN_SNR_DB = 2.0
+DEFAULT_ECHO_HANDOFF_MARGIN_DB = 6.0
 DEFAULT_LOG = "/share/leo/logs/wake-arbitration.jsonl"
 
 # (entries, loudness_winner) -> device id, or None to keep the loudness winner.
@@ -268,6 +273,11 @@ def nearest_settings(env=None) -> dict:
             raw.get("EM_ECHO_MARGIN_DB"), DEFAULT_ECHO_MARGIN_DB, 0, 40),
         "echo_solo_min_score": _float_opt(
             raw.get("EM_ECHO_SOLO_MIN_SCORE"), DEFAULT_ECHO_SOLO_MIN, 0, 1),
+        "min_snr_db": _float_opt(
+            raw.get("EM_ARBITRATION_MIN_SNR_DB"), DEFAULT_MIN_SNR_DB, 0, 40),
+        "echo_handoff_margin_db": _float_opt(
+            raw.get("EM_ECHO_HANDOFF_MARGIN_DB"),
+            DEFAULT_ECHO_HANDOFF_MARGIN_DB, 0, 80),
         "log_path": str(raw.get("EM_WAKE_ARBITRATION_LOG", DEFAULT_LOG) or ""),
     }
 
@@ -301,13 +311,51 @@ def _suspect(claim: Claim, margin: float) -> bool:
     return abs(claim.level - claim.playback_ref) <= margin
 
 
+def _adj_snr(claim: Claim, offsets: dict) -> float | None:
+    if claim.level is None or claim.floor_db is None:
+        return None
+    return (claim.level - claim.floor_db) + float(offsets.get(claim.device_id, 0.0) or 0.0)
+
+
+def _handoff_ok(claim: Claim, echo: Claim, offsets: dict,
+                min_snr_db: float, handoff_margin_db: float) -> bool:
+    """A clean claim may take the turn from a louder echo-flagged Dot."""
+    snr = _adj_snr(claim, offsets)
+    close = (
+        echo.level is not None and claim.level is not None
+        and abs(claim.level - echo.level) <= handoff_margin_db)
+    return (snr is not None and snr >= min_snr_db) or close
+
+
+def _echo_kept(echo: Claim, echo_solo_min_score: float,
+               verify_accept) -> tuple:
+    """The echo-flagged Dot answers, or the contest is dropped."""
+    if echo.score is not None and echo.score >= echo_solo_min_score:
+        return echo, "echo_score"
+    accepted = False
+    if verify_accept is not None:
+        try:
+            accepted = bool(verify_accept(echo.device_id))
+        except Exception:
+            accepted = False
+    if accepted:
+        return echo, "echo_verify"
+    return None, "echo_no_clean_claim"
+
+
 def pick_nearest(claims: list, offsets: dict | None = None,
                   echo_margin_db: float = DEFAULT_ECHO_MARGIN_DB,
                   echo_solo_min_score: float = DEFAULT_ECHO_SOLO_MIN,
+                  min_snr_db: float = DEFAULT_MIN_SNR_DB,
+                  echo_handoff_margin_db: float = DEFAULT_ECHO_HANDOFF_MARGIN_DB,
+                  verify_accept=None,
                   ) -> tuple:
     """(winner or None, why) for nearest-Dot arbitration.
 
-    None means nobody answers (`all_echo`). `why` is the log reason.
+    None means nobody answers (`all_echo`, or `echo_no_clean_claim` when a
+    louder echo has no clean claim that heard the user). `why` is the log
+    reason. `verify_accept(device_id)` is the second-stage checker, already
+    finished; a missing result does not answer.
     """
     offsets = offsets or {}
     earliest = min(claims, key=lambda c: (c.heard, c.device_id))
@@ -316,6 +364,7 @@ def pick_nearest(claims: list, offsets: dict | None = None,
     margin = echo_margin_db
     marked = [(c, _suspect(c, margin)) for c in claims]
     eligible = [c for c, suspect in marked if not suspect]
+    suspects = [c for c, suspect in marked if suspect]
     if not eligible:
         solo = claims[0] if len(claims) == 1 else None
         if (solo is not None and solo.score is not None
@@ -325,6 +374,16 @@ def pick_nearest(claims: list, offsets: dict | None = None,
     if len(claims) == 1:
         return eligible[0], "only"
     use_snr = all(c.floor_db is not None for c in claims)
+    if suspects:
+        echo_best = max(suspects, key=lambda c: _metric(c, use_snr, offsets))
+        clean_best = max(_metric(c, use_snr, offsets) for c in eligible)
+        if _metric(echo_best, use_snr, offsets) >= clean_best:
+            eligible = [
+                c for c in eligible
+                if _handoff_ok(c, echo_best, offsets, min_snr_db,
+                               echo_handoff_margin_db)]
+            if not eligible:
+                return _echo_kept(echo_best, echo_solo_min_score, verify_accept)
     best_adj = max(_metric(c, use_snr, offsets) for c in eligible)
     tied = [c for c in eligible if abs(_metric(c, use_snr, offsets) - best_adj) <= TIE_DB]
     if len(tied) == 1:
@@ -487,6 +546,9 @@ class WakeArbiter:
                       offsets: dict | None = None,
                       echo_margin_db: float = DEFAULT_ECHO_MARGIN_DB,
                       echo_solo_min_score: float = DEFAULT_ECHO_SOLO_MIN,
+                      min_snr_db: float = DEFAULT_MIN_SNR_DB,
+                      echo_handoff_margin_db: float = DEFAULT_ECHO_HANDOFF_MARGIN_DB,
+                      verify_accept=None,
                       log_path: str | None = None,
                       room: str = "") -> str:
         """
@@ -548,7 +610,8 @@ class WakeArbiter:
         finally:
             legacy_won, legacy_why = pick(entries)
             near_won, near_why = pick_nearest(
-                entries, offsets, echo_margin_db, echo_solo_min_score)
+                entries, offsets, echo_margin_db, echo_solo_min_score,
+                min_snr_db, echo_handoff_margin_db, verify_accept)
             if mode == "nearest":
                 won, self.last_why = near_won, near_why
             else:

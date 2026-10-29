@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.26.9
+
+An echo of the Dot that is already talking no longer hands the wake to a Dot that barely heard the user.
+
+### Fixed
+
+- In nearest mode, a Dot that is not flagged as its own playback can take the turn from a louder echo-flagged Dot only when its adjusted SNR is at least `arbitration_min_snr_db` (2 dB) or its level is within `echo_handoff_margin_db` (6 dB). If none qualify, the echo-flagged Dot answers when its score is at least 0.85 or the second-stage checker has already accepted it. Otherwise the contest is dropped (`echo_no_clean_claim`) and no Dot starts a turn.
+- Set `arbitration_min_snr_db` to 0 and `echo_handoff_margin_db` very high to restore the 2.26.8 handoff. The `/share` map stays, so `wake-arbitration.jsonl` still writes on the stage install.
+
 ## 2.26.8
 
 Nearest-Dot wake arbitration, shipped in shadow. The controller still answers with today's winner. The log names the Dot the new rule would pick. Set `arbitration_mode` to `nearest` to apply it, or `legacy` and restart to leave the new path entirely.

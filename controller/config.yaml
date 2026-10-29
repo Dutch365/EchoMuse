@@ -3,7 +3,7 @@ name: "EchoMuse"
 # derives from the controller-v* tag (controller-v2.18.0 -> 2.18.0). Bump
 # both together: Supervisor pulls `image:version`, so a version with no
 # matching tag on GHCR fails to install.
-version: "2.26.8"
+version: "2.26.9"
 # Pull the published multi-arch image rather than building on the user's
 # machine. Without this Supervisor builds from this directory's Dockerfile,
 # which downloads a few hundred MB on whatever the user runs Home Assistant
@@ -67,6 +67,8 @@ environment:
 # which is all this needs — we copy the file, never write it.
 map:
   - type: ssl
+  # Stage install writes wake-arbitration.jsonl under /share/leo/logs.
+  - type: share
 
 options:
   server_host: "0.0.0.0"
@@ -131,6 +133,11 @@ options:
   arbitration_room_offsets_db: ""
   echo_margin_db: 6
   echo_solo_min_score: 0.85
+  # A non-echo claim takes a louder echo-flagged Dot only at this adjusted
+  # SNR, or within echo_handoff_margin_db of that Dot's level. 0 and a very
+  # large handoff margin restore the 2.26.8 handoff.
+  arbitration_min_snr_db: 2
+  echo_handoff_margin_db: 6
   # Shadow logs a composite wake score beside the loudness winner.
   # off leaves the contest alone. live uses the composite as the winner.
   # The 80 ms early exit and the 250 ms hold stay as they are.
@@ -202,6 +209,8 @@ schema:
   arbitration_room_offsets_db: "str?"
   echo_margin_db: "float(0,40)"
   echo_solo_min_score: "float(0,1)"
+  arbitration_min_snr_db: "float(0,40)"
+  echo_handoff_margin_db: "float(0,80)"
   arb_score_mode: "list(off|shadow|live)"
   loser_cooldown_mode: "list(off|log|live)"
   loser_cooldown_s: "int(5,10)"
