@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.26.10
+
+A weak first Dot no longer wins the room before a clearer Dot has arrived, and a retry no longer dies on Home Assistant's duplicate-wake cooldown.
+
+### Fixed
+
+- In nearest mode a lone claim leaves at the early mark only when its SNR is at least `arbitration_early_min_snr_db` (8 dB) and it is not an echo. The mark is measured from when the word was heard. A weaker claim waits until the hold, the minimum wait, or the cap. `early_exit` and `close_reason` are on each line in `wake-arbitration.jsonl`. Set `arbitration_early_snr_gate` off to restore the previous early exit.
+- For `arbitration_takeover_max_ms` (250) after the grant, or until that Dot's pipeline starts, a late claim at least `arbitration_takeover_margin_db` (6 dB) clearer replaces the winner. The first Dot cedes and does not call Home Assistant. The decision reason is `takeover`. Set `arbitration_takeover` off to keep every late claim a loser.
+- A second Dot starting the same wake phrase inside `ha_wake_cooldown_s` (2.05 s) waits out the rest. The earlier pipeline is cancelled when it has no transcript, and mic audio keeps buffering. If Home Assistant still reports `duplicate_wake_up_detected`, the pipeline starts once more after the remainder. Set `ha_wake_cooldown` off to start immediately.
+
 ## 2.26.9
 
 An echo of the Dot that is already talking no longer hands the wake to a Dot that barely heard the user.

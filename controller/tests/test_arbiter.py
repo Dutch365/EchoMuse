@@ -687,10 +687,12 @@ def test_low_lag_solo_waits_80ms_and_high_lag_waits_150ms():
         t0 = loop.time()
         won = await arb.contest(
             "office", WINDOW, heard_at=t0 - age, hold_s=0.35, level=-40.0,
-            score=0.9, mode="nearest", min_wait_s=0.15, cap_s=0.6, early_s=0.08)
+            floor_db=-55.0, score=0.9, mode="nearest", min_wait_s=0.15,
+            cap_s=0.6, early_s=0.08, takeover=False)
         return won, loop.time() - t0
     won, low = run(once(0.09))
-    assert won == "office" and 0.05 < low < 0.12
+    # Early mark is heard + early_s, which is already past when the lag is 90 ms.
+    assert won == "office" and low < 0.05
     won, high = run(once(0.566))
     assert won == "office" and 0.12 < high < 0.22
 
@@ -702,7 +704,8 @@ def test_the_cap_is_600ms_after_arrival():
         t0 = loop.time()
         await arb.contest(
             "office", WINDOW, heard_at=t0, hold_s=2.0, level=-40.0,
-            mode="nearest", min_wait_s=2.0, cap_s=0.6, early_s=None)
+            mode="nearest", min_wait_s=2.0, cap_s=0.6, early_s=None,
+            takeover=False)
         return loop.time() - t0
     elapsed = run(main())
     assert 0.5 < elapsed < 0.75
@@ -738,12 +741,159 @@ def test_a_claim_after_the_decision_is_a_late_loser():
         t = asyncio.get_running_loop().time()
         first = await arb.contest(
             "office", 0.7, heard_at=t - 0.566, hold_s=0.35, level=-50.0,
-            score=0.9, mode="nearest", min_wait_s=0.05, cap_s=0.6, early_s=None)
+            score=0.9, mode="nearest", min_wait_s=0.05, cap_s=0.6, early_s=None,
+            takeover=False)
         late = await arb.contest(
             "girls", 0.7, heard_at=t - 0.50, hold_s=0.35, level=-20.0,
             score=0.99, mode="nearest", min_wait_s=0.05, cap_s=0.6)
         return first, late, arb.last_record["reason"]
     assert run(main()) == ("office", "office", "late_loser")
+
+
+def _nearest_1039(**extra):
+    """Installed knobs from the 10:39 Master Bedroom wake, plus overrides."""
+    base = dict(
+        hold_s=0.35, mode="nearest", min_wait_s=0.30, cap_s=0.60, early_s=0.15,
+        takeover=True, takeover_max_s=0.25, takeover_margin_db=6.0,
+        early_snr_gate=True, early_min_snr_db=8.0,
+    )
+    base.update(extra)
+    return base
+
+
+def test_1039_weak_first_claim_waits_out_the_hold():
+    """MBA at 2.0 dB SNR, lag 90 ms, must not leave at early_ms.
+
+    MBR is heard 125 ms later and arrives at 262 ms, inside the hold.
+    MBR wins. A lone 15 dB claim with 50 ms lag still leaves at early_s.
+    """
+    async def main():
+        arb = WakeArbiter()
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        mba = asyncio.create_task(arb.contest(
+            "G090LF09642108BA", 0.7, heard_at=t0 - 0.09, level=-70.0, floor_db=-72.0,
+            score=0.876, room="Master Bathroom", **_nearest_1039()))
+        await asyncio.sleep(0.172)
+        mbr = asyncio.create_task(arb.contest(
+            "G090LF1072941E3F", 0.7, heard_at=t0 - 0.09 + 0.125, level=-50.0,
+            floor_db=-62.6, score=0.925, room="Master Bedroom",
+            **_nearest_1039()))
+        won_a, won_b = await mba, await mbr
+        return won_a, won_b, arb.last_record, loop.time() - t0
+    won_a, won_b, record, elapsed = run(main())
+    assert won_a == won_b == "G090LF1072941E3F"
+    assert record["reason"] == "loudest"
+    assert record["early_exit"] is False
+    assert record["close_reason"] in ("hold", "min_wait")
+    assert elapsed > 0.30
+
+    async def lone():
+        arb = WakeArbiter()
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        won = await arb.contest(
+            "office", 0.7, heard_at=t0 - 0.05, level=-40.0, floor_db=-55.0,
+            score=0.9, **_nearest_1039(takeover=False))
+        return won, loop.time() - t0, arb.last_record
+    won, elapsed, record = run(lone())
+    assert won == "office"
+    assert record["early_exit"] is True and record["close_reason"] == "early"
+    # heard + 150 ms, and the claim is already 50 ms old, so about 100 ms.
+    assert 0.07 < elapsed < 0.16
+
+
+def test_1039_clearer_late_claim_takes_over_before_the_pipeline():
+    """The logged exit: weak MBA left at early_ms, MBR arrived 22 ms later.
+
+    With the SNR gate off that decision still happens, and the 10.6 dB
+    lead takes the turn before anyone calls Home Assistant. +4 dB does not.
+    A claim after the pipeline has started does not.
+    """
+    async def replay(level_b, floor_b, mark=False):
+        arb = WakeArbiter()
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        mba = asyncio.create_task(arb.contest(
+            "G090LF09642108BA", 0.7, heard_at=t0 - 0.089, level=-70.0,
+            floor_db=-72.0, score=0.876,
+            **_nearest_1039(early_snr_gate=False)))
+        await asyncio.sleep(0.172)
+        if mark:
+            arb.mark_pipeline_started()
+        mbr = asyncio.create_task(arb.contest(
+            "G090LF1072941E3F", 0.7, heard_at=t0 - 0.089 + 0.125,
+            level=level_b, floor_db=floor_b, score=0.925,
+            **_nearest_1039(early_snr_gate=False)))
+        return await mba, await mbr, arb.last_record
+
+    mba, mbr, record = run(replay(-50.0, -62.6))
+    assert (mba, mbr) == ("G090LF1072941E3F", "G090LF1072941E3F")
+    assert record["reason"] == "takeover"
+    assert {c["serial"] for c in record["claims"]} == {
+        "G090LF09642108BA", "G090LF1072941E3F"}
+
+    mba, mbr, record = run(replay(-66.0, -72.0))
+    # 6.0 - 2.0 = 4 dB, under the 6 dB margin.
+    assert (mba, mbr) == ("G090LF09642108BA", "G090LF09642108BA")
+    assert record["reason"] == "late_loser"
+
+    mba, mbr, record = run(replay(-50.0, -62.6, mark=True))
+    assert (mba, mbr) == ("G090LF09642108BA", "G090LF09642108BA")
+    assert record["reason"] == "late_loser"
+
+
+def test_ha_cooldown_delays_the_second_dot_and_cancels_the_first():
+    """A at t=0, B at t=1.997. B starts at or after 2.05, A is cancelled,
+    and B is handed the audio it buffered while waiting."""
+    import em_arbiter
+
+    class FakeHA:
+        def __init__(self):
+            self.starts = []
+            self.cancelled = []
+
+        def start(self, device, frames, now):
+            self.starts.append((device, list(frames), now))
+
+        def cancel(self, device):
+            self.cancelled.append(device)
+
+    async def main():
+        guard = em_arbiter.HaWakeCooldown()
+        ha = FakeHA()
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        cooldown = 2.05
+        phrase = "hey leo"
+
+        async def start(device, at, frames):
+            await asyncio.sleep(at)
+            now = loop.time()
+            plan = guard.plan(phrase, device, now, cooldown, True)
+            buffered = list(frames)
+            if plan["wait_s"] and not em_arbiter.buffer_allows(len(buffered), 256, plan["wait_s"]):
+                return "ha_cooldown", ha
+            if plan["cancel"] and device != plan["cancel"]:
+                ha.cancel(plan["cancel"])
+            if plan["wait_s"] > 0:
+                await asyncio.sleep(plan["wait_s"])
+                buffered.append(b"during-wait")
+            ha.start(device, buffered, loop.time() - t0)
+            guard.note_start(phrase, device, loop.time())
+            return "started", ha
+
+        a = asyncio.create_task(start("MBA", 0.0, [b"a0"]))
+        b = asyncio.create_task(start("MBR", 1.997, [b"b0"]))
+        await a
+        await b
+        return ha
+
+    ha = run(main())
+    assert ha.cancelled == ["MBA"]
+    assert [s[0] for s in ha.starts] == ["MBA", "MBR"]
+    assert ha.starts[1][1] == [b"b0", b"during-wait"]
+    assert ha.starts[1][2] >= 2.05
 
 
 def test_a_held_contest_without_levels_still_goes_to_the_first_to_hear():

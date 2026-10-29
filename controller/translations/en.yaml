@@ -171,6 +171,45 @@ configuration:
       take the turn only if its adjusted SNR is at least this, or its
       level is within the echo handoff margin. 2. Set this to 0 to hand
       the turn to any quieter Dot, which is the 2.26.8 rule.
+  arbitration_early_snr_gate:
+    name: Early exit respects the hold
+    description: >-
+      On. A lone wake leaves early only when its signal-to-noise ratio is
+      at least arbitration_early_min_snr_db and it is not an echo. A weaker
+      claim waits out the hold. Off restores the previous early exit.
+  arbitration_early_min_snr_db:
+    name: Early-exit minimum SNR (dB)
+    description: >-
+      The lone claim must be at least this clear to leave at
+      arbitration_early_ms. 8. Below this the contest waits out the hold.
+  arbitration_takeover:
+    name: Clearer late claim can take over
+    description: >-
+      On. Until the pipeline starts, or arbitration_takeover_max_ms,
+      a later Dot at least arbitration_takeover_margin_db clearer replaces
+      the winner and the first Dot never calls Home Assistant. Off keeps
+      every late claim a loser.
+  arbitration_takeover_max_ms:
+    name: Takeover window (milliseconds)
+    description: >-
+      How long after the decision a clearer Dot can still take the turn.
+      250. The window also ends when the winner's pipeline starts.
+  arbitration_takeover_margin_db:
+    name: Takeover margin (dB)
+    description: >-
+      How much clearer, in adjusted SNR, a late claim must be to replace
+      the winner. 6.
+  ha_wake_cooldown:
+    name: Avoid Home Assistant duplicate wake
+    description: >-
+      On. A second Dot starting the same wake phrase within
+      ha_wake_cooldown_s waits out the rest, and the earlier pipeline is
+      cancelled if it has no transcript yet. Off starts immediately.
+  ha_wake_cooldown_s:
+    name: Home Assistant wake cooldown (seconds)
+    description: >-
+      Home Assistant rejects a second pipeline for the same phrase inside
+      2 seconds. 2.05 clears that edge. The wait is at most this long.
   echo_handoff_margin_db:
     name: Echo handoff margin (dB)
     description: >-

@@ -78,6 +78,7 @@ import numpy as np
 from zeroconf.asyncio import AsyncZeroconf
 from zeroconf import ServiceInfo
 
+import em_arbiter
 import em_db as db
 import em_events
 import em_hostip
@@ -1167,19 +1168,7 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                 )
 
         elif event_type == ET.VOICE_ASSISTANT_ERROR:
-            code = data.get("code", "")
-            message = data.get("message", "")
-            log.warning(f"[{self._log_name}] Pipeline error: {code} — {message}")
-            self._pipeline_error = True
-            self._ha_audio_closed = True
-            # C1c fix: if the HA pipeline dies mid-STT, _stream_mic_audio may
-            # still be running (waiting on the device's own VAD-end sentinel).
-            # Unblock it too, not just the TTS waiter — otherwise the mic
-            # stream stays parked until the device's own gate closes.
-            self._ha_vad_end.set()
-            self._tts_event.set()  # unblock turn waiter
-            # An early TTS fetch is still open and HA will not close it.
-            self._tts_abort.set()
+            em_arbiter.note_pipeline_error(self, data)
 
     # ── Announcement handling ────────────────────────────────────────────
 
@@ -3203,6 +3192,9 @@ async def trigger_voice_turn(
         if trigger_label.startswith("wakeword") else ""
     )
 
+    if not await em_arbiter.guard_ha_start(device, wake_word_phrase, cancel_voice_turn):
+        return False
+    satellite._duplicate_retried = satellite._duplicate_retry = False
     await satellite.run_esphome_voice_turn(
         device=device,
         preroll_discard=preroll_discard,
@@ -3211,6 +3203,9 @@ async def trigger_voice_turn(
         trace=trace,
         wake_word_phrase=wake_word_phrase,
     )
+    await em_arbiter.after_ha_start(
+        device, satellite, wake_word_phrase, trace, satellite.run_esphome_voice_turn,
+        preroll_discard, on_thinking, post_turn_play)
 
     return satellite._continue_conversation
 
