@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.26.8
+
+Nearest-Dot wake arbitration, shipped in shadow. The controller still answers with today's winner. The log names the Dot the new rule would pick. Set `arbitration_mode` to `nearest` to apply it, or `legacy` and restart to leave the new path entirely.
+
+### Added
+
+- A contest stays open until 350 ms after the word was heard or 150 ms after the first claim arrives, whichever is later, and never longer than 600 ms after that arrival.
+- The nearest rule picks the loudest Dot after a per-Dot room offset. A tie within 0.05 dB breaks on wake score, then on who heard it first, then on the serial.
+- A wake that looks like the Dot's own playback can win only when it is the only claim and its score is at least 0.85. If every claim looks like playback, nobody answers.
+- Each decision is one JSON line. The default file is `/share/leo/logs/wake-arbitration.jsonl` when that directory exists.
+- In nearest mode a losing Dot is dropped for 3 seconds instead of only being logged.
+
 ## 2.26.7
 
 A quiet Dot's question was cut off by Home Assistant's speech detector. The gaps between words spent its silence budget, and the controller stopped the microphone when that end arrived.

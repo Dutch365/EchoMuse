@@ -83,6 +83,7 @@ import em_reconcile
 from version import VERSION as CONTROLLER_VERSION
 import em_releases
 import em_state
+import em_arbiter
 import em_auth as auth
 import em_api as api
 import em_pki
@@ -3274,6 +3275,9 @@ async def _claim_wake(device: "Device", heard_at: float | None,
                       score: float | None = None) -> str:
     """Claim the utterance for `device`. Loudness still picks; see em_arbiter."""
     hold = _arbitration_hold()
+    nearest = em_arbiter.nearest_settings()
+    if nearest["mode"] == "nearest" and hold > 0:
+        hold = nearest["hold_s"]
     floor_db = None
     if device.noise_floor:
         floor_db = round(
@@ -3287,6 +3291,15 @@ async def _claim_wake(device: "Device", heard_at: float | None,
             heard_at=heard_at, slack_s=_arbitration_slack(), hold_s=hold,
             level=level_db, gains=device.adc_gains, over_playback=over_playback,
             score=score, floor_db=floor_db, early_s=em_listen.arbitration_early(),
+            mode=nearest["mode"],
+            min_wait_s=nearest["min_wait_s"],
+            cap_s=nearest["cap_s"],
+            peak=None if level is None else level[1],
+            offsets=nearest["offsets"],
+            echo_margin_db=nearest["echo_margin_db"],
+            echo_solo_min_score=nearest["echo_solo_min_score"],
+            log_path=nearest["log_path"],
+            room=getattr(device, "label", "") or "",
         )
         em_reliability.note_claim(device, won_by, level_db, floor_db)
     now = asyncio.get_event_loop().time()

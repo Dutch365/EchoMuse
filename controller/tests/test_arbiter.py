@@ -542,6 +542,169 @@ def test_arbitration_early_defaults_to_80ms_and_clamps(monkeypatch):
     assert "early_s=em_listen.arbitration_early()" in body
 
 
+# ── nearest Dot (arrival-aware contest) ─────────────────────────────────────
+
+from em_arbiter import pick_nearest, nearest_close
+
+
+def _near(claims, offsets=None):
+    return pick_nearest(claims, offsets or {})
+
+
+def test_replay_0704_late_first_claim_loses_to_the_louder_dot():
+    """Living Room arrived 566 ms after it heard the word, so the 250 ms
+    hold had already expired. Girls and Boys arrived 25 ms and 59 ms later
+    and were louder. The loudest wins, inside the 150 ms arrival wait."""
+    async def main():
+        arb = WakeArbiter()
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        living = asyncio.create_task(arb.contest(
+            "living", 0.7, heard_at=t0 - 0.566, hold_s=0.35, level=-62.0,
+            score=0.846, floor_db=-80.0, mode="nearest", min_wait_s=0.15,
+            cap_s=0.6, early_s=0.08))
+        await asyncio.sleep(0.025)
+        girls = asyncio.create_task(arb.contest(
+            "girls", 0.7, heard_at=t0 - 0.500, hold_s=0.35, level=-41.0,
+            score=0.986, floor_db=-78.0, mode="nearest", min_wait_s=0.15,
+            cap_s=0.6, early_s=0.08))
+        await asyncio.sleep(0.034)
+        boys = asyncio.create_task(arb.contest(
+            "boys", 0.7, heard_at=t0 - 0.480, hold_s=0.35, level=-44.0,
+            score=0.984, floor_db=-79.0, mode="nearest", min_wait_s=0.15,
+            cap_s=0.6, early_s=0.08))
+        results = await living, await girls, await boys
+        return results, arb.last_why, loop.time() - t0
+    results, why, elapsed = run(main())
+    assert results == ("girls", "girls", "girls")
+    assert why == "loudest"
+    assert elapsed < 0.6
+    assert elapsed > 0.1
+
+
+def test_ties_break_on_score_then_heard_then_serial():
+    score = [
+        Claim(0.10, "b", -50.0, score=0.80, floor_db=-70.0),
+        Claim(0.00, "a", -50.0, score=0.90, floor_db=-70.0),
+    ]
+    who, why = _near(score)
+    assert (who.device_id, why) == ("a", "tie:score")
+    heard = [
+        Claim(0.20, "later", -50.00, score=0.9, floor_db=-70.0),
+        Claim(0.00, "earlier", -50.04, score=0.9, floor_db=-70.0),
+    ]
+    who, why = _near(heard)
+    assert (who.device_id, why) == ("earlier", "tie:heard")
+    serial = [
+        Claim(0.0, "m", -50.0, score=0.9, floor_db=-70.0),
+        Claim(0.0, "a", -50.0, score=0.9, floor_db=-70.0),
+    ]
+    who, why = _near(serial)
+    assert (who.device_id, why) == ("a", "tie:serial")
+    again, why2 = _near(list(reversed(serial)))
+    assert again.device_id == "a" and why2 == "tie:serial"
+
+
+def test_a_room_offset_moves_the_winner():
+    claims = [Claim(0.0, "near", -40.0, score=0.9, floor_db=-70.0),
+              Claim(0.1, "far", -50.0, score=0.9, floor_db=-70.0)]
+    assert _near(claims)[0].device_id == "near"
+    assert _near(claims, {"far": 20.0})[0].device_id == "far"
+
+
+def test_old_firmware_without_a_level_falls_back_to_the_earliest():
+    claims = [Claim(0.05, "new", -40.0, score=0.99),
+              Claim(0.00, "old", None, score=0.5)]
+    who, why = _near(claims)
+    assert who.device_id == "old" and why == "fallback:no-level"
+
+
+def test_echo_cases():
+    quiet = Claim(0.0, "quiet", -60.0, score=0.9, floor_db=-80.0)
+    echo = Claim(0.02, "echo", -20.0, score=0.99, floor_db=-80.0,
+                 over_playback=True, playback_ref=-22.0)
+    who, why = _near([quiet, echo])
+    assert who.device_id == "quiet" and why == "loudest"
+    loud_real = echo._replace(level=-40.0, playback_ref=-20.0)
+    assert _near([quiet, loud_real])[0].device_id == "echo"
+    solo_ok = Claim(0.0, "solo", -20.0, score=0.90, over_playback=True,
+                    playback_ref=-21.0)
+    who, why = _near([solo_ok])
+    assert who.device_id == "solo" and why == "only"
+    solo_weak = solo_ok._replace(score=0.40)
+    who, why = _near([solo_weak])
+    assert who is None and why == "all_echo"
+    other = echo._replace(device_id="other")
+    who, why = _near([echo, other])
+    assert who is None and why == "all_echo"
+
+
+def test_low_lag_solo_waits_80ms_and_high_lag_waits_150ms():
+    async def once(age):
+        arb = WakeArbiter()
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        won = await arb.contest(
+            "office", WINDOW, heard_at=t0 - age, hold_s=0.35, level=-40.0,
+            score=0.9, mode="nearest", min_wait_s=0.15, cap_s=0.6, early_s=0.08)
+        return won, loop.time() - t0
+    won, low = run(once(0.09))
+    assert won == "office" and 0.05 < low < 0.12
+    won, high = run(once(0.566))
+    assert won == "office" and 0.12 < high < 0.22
+
+
+def test_the_cap_is_600ms_after_arrival():
+    async def main():
+        arb = WakeArbiter()
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        await arb.contest(
+            "office", WINDOW, heard_at=t0, hold_s=2.0, level=-40.0,
+            mode="nearest", min_wait_s=2.0, cap_s=0.6, early_s=None)
+        return loop.time() - t0
+    elapsed = run(main())
+    assert 0.5 < elapsed < 0.75
+    assert nearest_close(0.0, 1.0, 0.35, 0.15, 0.6) == 1.15
+
+
+def test_legacy_and_shadow_keep_todays_winner():
+    """Playback still sends the legacy contest back to who heard first.
+    Shadow logs the nearest winner and returns the legacy one."""
+    async def main(mode):
+        arb = WakeArbiter()
+        t = asyncio.get_running_loop().time()
+        first = asyncio.create_task(arb.contest(
+            "first", 0.7, heard_at=t, hold_s=0.1, level=-70.0, score=0.5,
+            mode=mode, early_s=None))
+        await asyncio.sleep(0.02)
+        playing = asyncio.create_task(arb.contest(
+            "playing", 0.7, heard_at=t + 0.02, hold_s=0.1, level=-30.0,
+            score=0.99, over_playback=True, playback_ref=-80.0,
+            mode=mode, early_s=None))
+        return (await first, await playing, arb.last_why,
+                None if arb.last_nearest is None else arb.last_nearest[0])
+    assert run(main("legacy"))[:2] == ("first", "first")
+    applied = run(main("shadow"))
+    assert applied[0] == "first" and applied[1] == "first"
+    assert "over playback" in applied[2]
+    assert applied[3] == "playing"
+
+
+def test_a_claim_after_the_decision_is_a_late_loser():
+    async def main():
+        arb = WakeArbiter()
+        t = asyncio.get_running_loop().time()
+        first = await arb.contest(
+            "office", 0.7, heard_at=t - 0.566, hold_s=0.35, level=-50.0,
+            score=0.9, mode="nearest", min_wait_s=0.05, cap_s=0.6, early_s=None)
+        late = await arb.contest(
+            "girls", 0.7, heard_at=t - 0.50, hold_s=0.35, level=-20.0,
+            score=0.99, mode="nearest", min_wait_s=0.05, cap_s=0.6)
+        return first, late, arb.last_record["reason"]
+    assert run(main()) == ("office", "office", "late_loser")
+
+
 def test_a_held_contest_without_levels_still_goes_to_the_first_to_hear():
     async def main():
         arb = WakeArbiter()

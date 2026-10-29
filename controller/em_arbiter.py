@@ -120,7 +120,26 @@ only decision. The default install logs a shadow score and returns None.
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
+import os
+import time
 from typing import NamedTuple
+
+log = logging.getLogger("echomuse.arbiter")
+
+# Nearest-Dot contest (2026-10-29). legacy is the 250 ms hold and pick().
+# shadow runs that path and logs the nearest winner. nearest waits
+# max(heard + hold, arrival + min_wait), capped, and returns pick_nearest().
+MODES = ("legacy", "shadow", "nearest")
+TIE_DB = 0.05
+EARLY_LAG_S = 0.15
+DEFAULT_HOLD_S = 0.35
+DEFAULT_MIN_WAIT_S = 0.15
+DEFAULT_CAP_S = 0.60
+DEFAULT_ECHO_MARGIN_DB = 6.0
+DEFAULT_ECHO_SOLO_MIN = 0.85
+DEFAULT_LOG = "/share/leo/logs/wake-arbitration.jsonl"
 
 # (entries, loudness_winner) -> device id, or None to keep the loudness winner.
 # Assigned by em_reliability. This module does not import that one.
@@ -140,6 +159,15 @@ class Claim(NamedTuple):
     score: float | None = None
     # Noise floor in the same dBFS scale as `level`. SNR is level - floor.
     floor_db: float | None = None
+    # Loudest frame in the wake window, dBFS. Logged; pick() does not use it.
+    peak: float | None = None
+    # When this claim reached the controller, loop clock. None means `heard`.
+    arrived: float | None = None
+    # This Dot's own playback reference, dBFS. Echo check only.
+    playback_ref: float | None = None
+    # Another Dot, or a same-room player, was playing.
+    external_playing: bool = False
+    room: str = ""
 
 
 def _primary(claim: Claim, use_snr: bool) -> float:
@@ -186,6 +214,208 @@ def pick(claims: list) -> tuple:
     return best, f"loudest by {lead:.1f}{unit}"
 
 
+def arbitration_mode(env=None) -> str:
+    """`legacy`, `shadow`, or `nearest`. Anything else is shadow."""
+    raw = os.environ if env is None else env
+    text = str(raw.get("EM_ARBITRATION_MODE", "") or "").strip().lower()
+    if text in MODES:
+        return text
+    return "shadow"
+
+
+def _float_opt(raw, default, lo, hi):
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        value = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+    return min(hi, max(lo, value))
+
+
+def room_offsets(env=None) -> dict:
+    """Serial → dB. Missing, empty, or unreadable is an empty map."""
+    raw = os.environ if env is None else env
+    text = str(raw.get("EM_ARBITRATION_ROOM_OFFSETS_DB", "") or "").strip()
+    if not text:
+        return {}
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    for key, value in data.items():
+        try:
+            out[str(key)] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def nearest_settings(env=None) -> dict:
+    """Options the contest reads. Times are seconds."""
+    raw = os.environ if env is None else env
+    mode = arbitration_mode(raw)
+    return {
+        "mode": mode,
+        "hold_s": _float_opt(raw.get("EM_ARBITRATION_HOLD_MS"), 350, 0, 2000) / 1000.0,
+        "min_wait_s": _float_opt(raw.get("EM_ARBITRATION_MIN_WAIT_MS"), 150, 0, 2000) / 1000.0,
+        "cap_s": _float_opt(raw.get("EM_ARBITRATION_CAP_MS"), 600, 1, 5000) / 1000.0,
+        "offsets": room_offsets(raw),
+        "echo_margin_db": _float_opt(
+            raw.get("EM_ECHO_MARGIN_DB"), DEFAULT_ECHO_MARGIN_DB, 0, 40),
+        "echo_solo_min_score": _float_opt(
+            raw.get("EM_ECHO_SOLO_MIN_SCORE"), DEFAULT_ECHO_SOLO_MIN, 0, 1),
+        "log_path": str(raw.get("EM_WAKE_ARBITRATION_LOG", DEFAULT_LOG) or ""),
+    }
+
+
+def nearest_close(heard: float, arrived: float, hold_s: float,
+                   min_wait_s: float, cap_s: float | None) -> float:
+    """Loop-clock instant the contest closes.
+
+    max(heard + hold, arrival + min_wait), and never later than arrival + cap.
+    """
+    close = max(heard + hold_s, arrived + min_wait_s)
+    if cap_s is not None and cap_s > 0:
+        close = min(close, arrived + cap_s)
+    return close
+
+
+def _metric(claim: Claim, use_snr: bool, offsets: dict) -> float:
+    base = (claim.level - claim.floor_db) if use_snr else claim.level
+    return base + float(offsets.get(claim.device_id, 0.0) or 0.0)
+
+
+def _suspect(claim: Claim, margin: float) -> bool:
+    """Playing, and the wake level sits on that playback."""
+    if claim.level is None:
+        return False
+    playing = claim.over_playback or claim.external_playing
+    if not playing:
+        return False
+    if claim.playback_ref is None:
+        return bool(claim.over_playback or claim.external_playing)
+    return abs(claim.level - claim.playback_ref) <= margin
+
+
+def pick_nearest(claims: list, offsets: dict | None = None,
+                  echo_margin_db: float = DEFAULT_ECHO_MARGIN_DB,
+                  echo_solo_min_score: float = DEFAULT_ECHO_SOLO_MIN,
+                  ) -> tuple:
+    """(winner or None, why) for nearest-Dot arbitration.
+
+    None means nobody answers (`all_echo`). `why` is the log reason.
+    """
+    offsets = offsets or {}
+    earliest = min(claims, key=lambda c: (c.heard, c.device_id))
+    if any(c.level is None for c in claims):
+        return earliest, "fallback:no-level"
+    margin = echo_margin_db
+    marked = [(c, _suspect(c, margin)) for c in claims]
+    eligible = [c for c, suspect in marked if not suspect]
+    if not eligible:
+        solo = claims[0] if len(claims) == 1 else None
+        if (solo is not None and solo.score is not None
+                and solo.score >= echo_solo_min_score):
+            return solo, "only"
+        return None, "all_echo"
+    if len(claims) == 1:
+        return eligible[0], "only"
+    use_snr = all(c.floor_db is not None for c in claims)
+    best_adj = max(_metric(c, use_snr, offsets) for c in eligible)
+    tied = [c for c in eligible if abs(_metric(c, use_snr, offsets) - best_adj) <= TIE_DB]
+    if len(tied) == 1:
+        return tied[0], "loudest"
+    scores = [c.score for c in tied]
+    if all(s is not None for s in scores) and len(set(scores)) > 1:
+        winner = max(tied, key=lambda c: (c.score, -c.heard, _neg_serial(c)))
+        return winner, "tie:score"
+    heards = {c.heard for c in tied}
+    if len(heards) > 1:
+        winner = min(tied, key=lambda c: (c.heard, c.device_id))
+        return winner, "tie:heard"
+    winner = min(tied, key=lambda c: c.device_id)
+    return winner, "tie:serial"
+
+
+def _neg_serial(claim: Claim):
+    # max() cannot take a lowest string. Rank by inverted code points.
+    return tuple(-ord(ch) for ch in claim.device_id)
+
+
+def _snr(claim: Claim):
+    if claim.level is None or claim.floor_db is None:
+        return None
+    return claim.level - claim.floor_db
+
+
+def decision_record(contest_id: int, claims: list, winner: str | None,
+                    reason: str, opened_heard: float, opened_arrived: float,
+                    hold_s: float, min_wait_s: float, cap_s: float | None,
+                    decided_at: float, offsets: dict | None = None,
+                    echo_margin_db: float = DEFAULT_ECHO_MARGIN_DB) -> dict:
+    """One contest, as the JSON line the log stores."""
+    offsets = offsets or {}
+    use_snr = claims and all(c.level is not None and c.floor_db is not None for c in claims)
+    rows = []
+    for claim in claims:
+        lag = None
+        if claim.arrived is not None:
+            lag = claim.arrived - claim.heard
+        adj = None
+        if claim.level is not None:
+            adj = _metric(claim, use_snr, offsets)
+        rows.append({
+            "serial": claim.device_id,
+            "room": claim.room,
+            "score": claim.score,
+            "level": claim.level,
+            "peak": claim.peak,
+            "floor": claim.floor_db,
+            "snr": _snr(claim),
+            "offset": float(offsets.get(claim.device_id, 0.0) or 0.0),
+            "adj": adj,
+            "heard_at": claim.heard,
+            "arrival_lag_s": lag,
+            "over_playback": claim.over_playback,
+            "suspect_echo": _suspect(claim, echo_margin_db) if claim.level is not None else False,
+        })
+    return {
+        "contest_id": contest_id,
+        "claims": rows,
+        "winner": winner,
+        "reason": reason,
+        "window": {
+            "hold_s": hold_s,
+            "min_wait_s": min_wait_s,
+            "cap_s": cap_s,
+            "opened_heard": opened_heard,
+            "opened_arrived": opened_arrived,
+        },
+        "decided_at": decided_at,
+        "wall_time": time.time(),
+    }
+
+
+def append_decision(record: dict, path: str | None) -> None:
+    """Log one decision. The file write is skipped when its directory is absent."""
+    line = json.dumps(record, separators=(",", ":"), default=str)
+    log.info("wake-arbitration %s", line)
+    if not path:
+        return
+    try:
+        parent = os.path.dirname(path)
+        if parent and not os.path.isdir(parent):
+            return
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except OSError:
+        log.warning("wake-arbitration log was not written")
+
+
 class WakeArbiter:
     """
     Tracks the in-flight claim on the current utterance.
@@ -205,6 +435,10 @@ class WakeArbiter:
         self.last_why: str = ""
         # Claims the last contest decided among. Empty until one is held.
         self.last_entries: list = []
+        # Nearest-Dot answer for the last contest, even when legacy decided.
+        self.last_nearest: tuple | None = None
+        self.last_record: dict | None = None
+        self._seq: int = 0
 
     def claim(self, device_id: str, window_s: float,
               heard_at: float | None = None, slack_s: float = 0.0) -> str:
@@ -243,7 +477,18 @@ class WakeArbiter:
                       gains: tuple | None = None, over_playback: bool = False,
                       score: float | None = None,
                       floor_db: float | None = None,
-                      early_s: float | None = None) -> str:
+                      early_s: float | None = None,
+                      mode: str = "legacy",
+                      min_wait_s: float = 0.0,
+                      cap_s: float | None = None,
+                      peak: float | None = None,
+                      playback_ref: float | None = None,
+                      external_playing: bool = False,
+                      offsets: dict | None = None,
+                      echo_margin_db: float = DEFAULT_ECHO_MARGIN_DB,
+                      echo_solo_min_score: float = DEFAULT_ECHO_SOLO_MIN,
+                      log_path: str | None = None,
+                      room: str = "") -> str:
         """
         claim(), held so that every Echo that heard the utterance is counted
         and `pick()` chooses the loudest, or failing a usable level the one
@@ -266,39 +511,57 @@ class WakeArbiter:
         now = loop.time()
         heard = now if heard_at is None else min(heard_at, now)
 
+        fresh = Claim(
+            heard, device_id, level, gains, over_playback, score, floor_db,
+            peak, now, playback_ref, external_playing, room)
         if self._contest is not None:
             opened, entries, decided = self._contest
             if abs(heard - opened) < window_s:
-                entries.append(Claim(
-                    heard, device_id, level, gains, over_playback, score, floor_db))
+                entries.append(fresh)
                 return await asyncio.shield(decided)
 
         # No contest to join. A granted winner still holds this utterance.
         if (self._winner is not None and self._winner != device_id
                 and abs(heard - self._heard_at) < window_s
                 and now - self._heard_at < window_s + max(0.0, slack_s)):
+            if mode in ("nearest", "shadow"):
+                self._log_late(fresh, window_s, mode, offsets, echo_margin_db, log_path)
             return self._winner
 
-        entries = [Claim(
-            heard, device_id, level, gains, over_playback, score, floor_db)]
+        entries = [fresh]
         decided: asyncio.Future = loop.create_future()
         self._contest = (heard, entries, decided)
         try:
             # None and <= 0 are the full hold. A positive early mark grants
             # a lone claim then; a second claim already in `entries` keeps
             # the rest of the hold open for anyone else inside the window.
-            limit = hold_s
-            if early_s is not None and early_s > 0:
-                limit = min(early_s, hold_s)
-            await asyncio.sleep(max(0.0, heard + limit - now))
-            if limit < hold_s and len(entries) >= 2:
-                await asyncio.sleep(max(0.0, heard + hold_s - loop.time()))
+            if mode == "nearest":
+                await self._wait_nearest(
+                    heard, now, hold_s, min_wait_s, cap_s, early_s, entries, loop)
+            else:
+                limit = hold_s
+                if early_s is not None and early_s > 0:
+                    limit = min(early_s, hold_s)
+                await asyncio.sleep(max(0.0, heard + limit - now))
+                if limit < hold_s and len(entries) >= 2:
+                    await asyncio.sleep(max(0.0, heard + hold_s - loop.time()))
         finally:
-            won, self.last_why = pick(entries)
+            legacy_won, legacy_why = pick(entries)
+            near_won, near_why = pick_nearest(
+                entries, offsets, echo_margin_db, echo_solo_min_score)
+            if mode == "nearest":
+                won, self.last_why = near_won, near_why
+            else:
+                won, self.last_why = legacy_won, legacy_why
+            near_id = None if near_won is None else near_won.device_id
+            self.last_nearest = (near_id, near_why)
             self.last_entries = list(entries)
-            winner = won.device_id
+            if won is None:
+                winner = ""
+            else:
+                winner = won.device_id
             hook = score_hook
-            if hook is not None:
+            if hook is not None and mode != "nearest":
                 try:
                     alt = hook(self.last_entries, winner)
                 except Exception:
@@ -307,10 +570,52 @@ class WakeArbiter:
                     winner = alt
             if self._contest is not None and self._contest[2] is decided:
                 self._contest = None
-            self._winner, self._heard_at = winner, won.heard
+            if won is None or not winner:
+                self._winner, self._heard_at = None, 0.0
+            else:
+                self._winner, self._heard_at = winner, won.heard
+            self._seq += 1
+            if mode in ("nearest", "shadow"):
+                why = near_why if mode == "nearest" else (
+                    f"shadow:{near_why};legacy:{legacy_why}")
+                record = decision_record(
+                    self._seq, self.last_entries,
+                    winner if mode == "nearest" else near_id,
+                    why, heard, now, hold_s, min_wait_s, cap_s, loop.time(),
+                    offsets, echo_margin_db)
+                if mode == "shadow":
+                    record["applied_winner"] = winner
+                    record["applied_reason"] = legacy_why
+                self.last_record = record
+                append_decision(record, log_path)
             if not decided.done():
                 decided.set_result(winner)
         return winner
+
+    async def _wait_nearest(self, heard, now, hold_s, min_wait_s, cap_s,
+                            early_s, entries, loop) -> None:
+        """Arrival-aware hold. A low-lag lone claim may leave at early_s."""
+        lag = now - heard
+        close = nearest_close(heard, now, hold_s, min_wait_s, cap_s)
+        if early_s is not None and early_s > 0 and lag < EARLY_LAG_S:
+            early_at = min(now + early_s, close)
+            await asyncio.sleep(max(0.0, early_at - now))
+            if len(entries) < 2:
+                return
+        await asyncio.sleep(max(0.0, close - loop.time()))
+
+    def _log_late(self, claim: Claim, window_s: float, mode: str,
+                  offsets, echo_margin_db: float, log_path: str | None) -> None:
+        self._seq += 1
+        record = decision_record(
+            self._seq, [claim], self._winner, "late_loser",
+            self._heard_at, claim.arrived or claim.heard,
+            0.0, 0.0, None, claim.arrived or claim.heard,
+            offsets, echo_margin_db)
+        record["window_s"] = window_s
+        record["mode"] = mode
+        self.last_record = record
+        append_decision(record, log_path)
 
     def release(self, device_id: str) -> None:
         """

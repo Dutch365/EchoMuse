@@ -122,6 +122,47 @@ configuration:
       Off by default. When on, a stall longer than one second dumps the
       blocking stack and names the turn or upload that was running. The
       250 millisecond stall warning is unchanged.
+  arbitration_mode:
+    name: Wake arbitration mode
+    description: >-
+      shadow logs which Dot the nearest-Dot rule would pick and still
+      answers with today's winner. nearest waits up to 600 milliseconds
+      and answers on the calibrated loudest Dot. legacy is the 250
+      millisecond hold alone. Set legacy and restart to roll back.
+  arbitration_hold_ms:
+    name: Arbitration hold (milliseconds)
+    description: >-
+      How long after the word was heard the nearest contest stays open.
+      350. The contest also waits arbitration_min_wait_ms after the first
+      claim arrives, and never longer than arbitration_cap_ms.
+  arbitration_min_wait_ms:
+    name: Arbitration minimum wait (milliseconds)
+    description: >-
+      How long to keep the contest open after the first claim arrives,
+      even when the hold measured from when the word was heard has
+      already run out. 150.
+  arbitration_cap_ms:
+    name: Arbitration cap (milliseconds)
+    description: >-
+      The contest decides no later than this many milliseconds after the
+      first claim arrives. 600.
+  arbitration_room_offsets_db:
+    name: Room calibration offsets (dB)
+    description: >-
+      JSON map of Dot serial to a decibel offset. Empty means every
+      offset is 0. The nearest rule adds the offset to that Dot's
+      loudness before it picks.
+  echo_margin_db:
+    name: Echo margin (dB)
+    description: >-
+      A wake heard over playback, within this many dB of that Dot's
+      playback level, is an echo. 6. It can win only when it is the only
+      claim and its score reaches the solo minimum.
+  echo_solo_min_score:
+    name: Echo solo minimum score
+    description: >-
+      The wake score a lone echo-suspect claim needs in order to answer.
+      0.85. Below that, nobody answers.
   arbitration_early_ms:
     name: Arbitration early exit (milliseconds)
     description: >-
