@@ -387,6 +387,70 @@ def test_a_bad_confidence_keeps_the_default():
     assert out["listenConfidence"] == tc.LISTEN_CONFIDENCE
 
 
+def test_an_early_ha_end_is_held_while_the_gate_still_hears_speech():
+    # Kitchen, 2026-10-28. HA's silence budget ended the turn mid-question.
+    # The controller's gate had heard speech 0.2s earlier, so the end waits.
+    honor, _ = tc.honor_ha_vad_end(
+        now=6.0, speech_started_at=1.8, last_heard_at=5.8)
+    assert honor is False
+
+
+def test_ha_end_is_taken_once_the_gate_has_been_quiet():
+    honor, why = tc.honor_ha_vad_end(
+        now=6.0, speech_started_at=1.8, last_heard_at=4.9)
+    assert honor is True
+    assert "quiet" in why
+
+
+def test_a_held_ha_end_still_stops_at_the_hard_cap():
+    honor, why = tc.honor_ha_vad_end(
+        now=16.8, speech_started_at=1.8, last_heard_at=16.7)
+    assert honor is True
+    assert "15" in why
+
+
+def test_ha_end_with_no_speech_of_ours_is_taken():
+    honor, _ = tc.honor_ha_vad_end(
+        now=2.0, speech_started_at=None, last_heard_at=None)
+    assert honor is True
+
+
+def test_a_held_end_widens_the_listen_cap_to_the_same_15s():
+    class Dev:
+        max_listen_s = 7.0
+        trail_cutoff_s = 0.9
+    clock = tc.ListenClock()
+    clock.speech_started_at = 0.0
+    clock.last_confident_at = 6.5
+    clock.first_speech_at = 0.0
+    clock.last_speech_at = 6.5
+    end, _ = tc.endpoint_verdict(7.0, True, True, clock, Dev())
+    assert end is True
+    end, _ = tc.endpoint_verdict(
+        7.0, True, True, clock, Dev(),
+        max_listen_s=tc.HA_VAD_HOLD_CAP_S, trail_cutoff_s=tc.HA_VAD_QUIET_S)
+    assert end is False
+    end, why = tc.endpoint_verdict(
+        15.0, True, True, clock, Dev(),
+        max_listen_s=tc.HA_VAD_HOLD_CAP_S, trail_cutoff_s=tc.HA_VAD_QUIET_S)
+    assert end is True
+    assert "15.0" in why
+
+
+def test_the_stream_holds_ha_vad_and_sends_gain():
+    import ast
+    from tests._sources import find_def
+    _, stream = find_def("_stream_mic_audio")
+    body = ast.unparse(stream)
+    assert "honor_ha_vad_end" in body
+    assert "_ha_audio_closed" in body
+    _, turn = find_def("run_esphome_voice_turn")
+    sent = ast.unparse(turn)
+    assert "VoiceAssistantAudioSettings" in sent
+    assert "auto_gain=31" in sent
+    assert "volume_multiplier=2.0" in sent
+
+
 def test_apply_listen_copies_seconds():
     class Dev:
         pass

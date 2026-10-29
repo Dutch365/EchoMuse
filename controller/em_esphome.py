@@ -478,6 +478,10 @@ class EchoMuseSatellite(SatelliteServerProtocol):
         # HA has already produced (or errored out on) a result. Cleared at
         # the start of every turn alongside the other per-turn flags.
         self._ha_vad_end = asyncio.Event()
+        # Held STT_VAD_END, and a close (STT_END / ERROR / run never started)
+        # that ends the hold because HA will not read another sample.
+        self._ha_vad_deferred = False
+        self._ha_audio_closed = False
 
         # Set on STT_VAD_START — HA's VAD heard speech begin. Used by
         # _stream_mic_audio to disarm the no-speech timeout when the
@@ -1022,6 +1026,7 @@ class EchoMuseSatellite(SatelliteServerProtocol):
             # STT_VAD_END normally gets here first and this is a no-op. It is
             # the pipelines that never emit it that strand the turn.
             self._ha_vad_end.set()
+            self._ha_audio_closed = True
             if self._trace:
                 self._trace.stt_text = text
                 self._trace.t_stt_ms = self._trace.elapsed_ms()
@@ -1108,6 +1113,7 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                 self._ha_never_started = True
                 self._run_finished = True
                 self._ha_vad_end.set()
+                self._ha_audio_closed = True
                 self._tts_event.set()
                 return
             # HA can emit a RUN_END that isn't the turn's real terminal event —
@@ -1165,6 +1171,7 @@ class EchoMuseSatellite(SatelliteServerProtocol):
             message = data.get("message", "")
             log.warning(f"[{self._log_name}] Pipeline error: {code} — {message}")
             self._pipeline_error = True
+            self._ha_audio_closed = True
             # C1c fix: if the HA pipeline dies mid-STT, _stream_mic_audio may
             # still be running (waiting on the device's own VAD-end sentinel).
             # Unblock it too, not just the TTS waiter — otherwise the mic
@@ -1403,6 +1410,8 @@ class EchoMuseSatellite(SatelliteServerProtocol):
         self._continue_conversation = False
         self._no_speech_timeout     = False
         self._ha_vad_end.clear()
+        self._ha_vad_deferred = False
+        self._ha_audio_closed = False
         self._ha_vad_start.clear()
         self._thinking_entered = False
         self._on_thinking    = on_thinking
@@ -1433,11 +1442,20 @@ class EchoMuseSatellite(SatelliteServerProtocol):
             # AssistSatelliteError("No wake word phrase provided") and ends the
             # run within milliseconds. Every turn worked, and the one flow that
             # asks the device to prove it heard a wake word could never finish.
+            # auto_gain is ESPHome's target in dBFS (31 is the documented
+            # setting). volume_multiplier is linear gain on top of it, so HA's
+            # segmenter scores a quiet Dot above 0.5 instead of spending its
+            # 0.7s silence budget on the gaps between words. noise suppression
+            # stays at the protobuf default: this is level, not a denoiser.
             self._send_one(api_pb2.VoiceAssistantRequest(
                 start=True,
                 conversation_id=self._conversation_id,
                 flags=VOICE_REQUEST_FLAGS_WAKE_WORD_DONE,
                 wake_word_phrase=wake_word_phrase,
+                audio_settings=api_pb2.VoiceAssistantAudioSettings(
+                    auto_gain=31,
+                    volume_multiplier=2.0,
+                ),
             ))
 
             # ── Stream mic audio from device.voice_queue ──────────────────
@@ -1852,22 +1870,37 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                     self._turn_cancelled = True
                     return
 
-                if self._ha_vad_end.is_set():
-                    # HA has already ended its side of the turn (STT_VAD_END or
-                    # ERROR) — nothing further sent here can matter. Send end=True
-                    # defensively in case the device sentinel never arrives (the
-                    # noisy-room case this fix targets); if the device sentinel
-                    # already sent it, a second end=True is harmless.
-                    log.info(
-                        f"[{self._log_name}] HA VAD end — stopping mic streaming "
-                        f"(device's own RMS gate may still be open; noise-robust "
-                        f"HA endpointing wins the race)"
-                    )
-                    if self._trace and self._trace.t_vad_end_ms == -1:
-                        self._trace.t_vad_end_ms = self._trace.elapsed_ms()
-                    if self._transport and not self._transport.is_closing():
-                        self._send_one(api_pb2.VoiceAssistantAudio(data=b"", end=True))
-                    return
+                if self._ha_vad_end.is_set() or self._ha_vad_deferred:
+                    # HA's end is authoritative only once our own gate has also
+                    # gone quiet. A quiet Dot trips the segmenter's silence
+                    # budget between words; stopping there drops the rest of
+                    # the question. The event is cleared while held so the
+                    # wait below does not spin, and the 7s listen cap is
+                    # widened to the 15s hold cap for the same reason.
+                    now = time.monotonic()
+                    last_heard = clock.last_confident_at
+                    if last_heard is None:
+                        last_heard = clock.last_speech_at
+                    if self._ha_audio_closed:
+                        honor, why = True, "HA closed audio"
+                    else:
+                        honor, why = em_turnclock.honor_ha_vad_end(
+                            now, clock.speech_started_at, last_heard)
+                    if not honor:
+                        if not self._ha_vad_deferred:
+                            log.info(
+                                f"[{self._log_name}] HA VAD end held — "
+                                f"controller gate still hearing speech"
+                            )
+                        self._ha_vad_deferred = True
+                        self._ha_vad_end.clear()
+                    else:
+                        log.info(f"[{self._log_name}] {why} — stopping mic streaming")
+                        if self._trace and self._trace.t_vad_end_ms == -1:
+                            self._trace.t_vad_end_ms = self._trace.elapsed_ms()
+                        if self._transport and not self._transport.is_closing():
+                            self._send_one(api_pb2.VoiceAssistantAudio(data=b"", end=True))
+                        return
 
                 # No-speech timeout: if nothing above the room's noise floor has
                 # arrived within NO_SPEECH_TIMEOUT seconds, treat as accidental
@@ -1900,7 +1933,11 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                 # Same exit as the device sentinel: end=True, then thinking (#370).
                 stalled, stall_why = em_turnclock.endpoint_verdict(
                     time.monotonic(), speech_seen,
-                    self._ha_vad_start.is_set(), clock, device)
+                    self._ha_vad_start.is_set(), clock, device,
+                    **({
+                        "max_listen_s": em_turnclock.HA_VAD_HOLD_CAP_S,
+                        "trail_cutoff_s": em_turnclock.HA_VAD_QUIET_S,
+                    } if self._ha_vad_deferred else {}))
                 if stalled:
                     log.info(f"[{self._log_name}] {stall_why} — sending audio end to HA")
                     if self._trace and self._trace.t_vad_end_ms == -1:
