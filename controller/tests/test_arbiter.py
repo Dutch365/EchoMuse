@@ -619,6 +619,47 @@ def test_old_firmware_without_a_level_falls_back_to_the_earliest():
     assert who.device_id == "old" and why == "fallback:no-level"
 
 
+def test_contest_7_does_not_hand_an_echo_to_a_near_silent_dot():
+    """7:54:58. Living Room was answering and heard Shawn. Girls Room
+    scored the wake at 0.4 dB SNR, 7.1 dB quieter, and took the turn."""
+    living = Claim(
+        0.00, "G090LF1073051TKD", -60.7, score=0.75, floor_db=-63.9,
+        over_playback=True)
+    girls = Claim(0.02, "G090LF09649200P3", -67.8, score=0.69, floor_db=-68.2)
+    assert abs((-67.8) - (-60.7)) > 6
+    who, why = pick_nearest([living, girls], verify_accept=lambda _d: False)
+    assert who is None and why == "echo_no_clean_claim"
+    who, why = pick_nearest(
+        [living, girls], verify_accept=lambda d: d.endswith("1TKD"))
+    assert who.device_id == "G090LF1073051TKD" and why == "echo_verify"
+    kept, why = pick_nearest([living._replace(score=0.90), girls])
+    assert kept.device_id == "G090LF1073051TKD" and why == "echo_score"
+    # 0 dB SNR and a huge level margin is the 2.26.8 handoff.
+    back, why = pick_nearest(
+        [living, girls], min_snr_db=0, echo_handoff_margin_db=80)
+    assert back.device_id == "G090LF09649200P3" and why == "loudest"
+
+
+def test_a_clean_claim_near_the_echo_and_above_the_snr_floor_still_wins():
+    echo = Claim(0.00, "echo", -50.0, score=0.99, floor_db=-53.2,
+                 over_playback=True)
+    clean = Claim(0.02, "clean", -55.0, score=0.80, floor_db=-59.0)
+    assert (clean.level - clean.floor_db) == 4
+    assert abs(clean.level - echo.level) <= 6
+    who, why = pick_nearest([echo, clean])
+    assert who.device_id == "clean" and why == "loudest"
+
+
+def test_contests_without_an_echo_flag_still_go_to_the_louder_dot():
+    """Contests 8 and 9 had no echo flag. Living Room was louder."""
+    for level_other, snr_other in ((-70.0, 8.0), (-66.0, 5.5)):
+        living = Claim(0.01, "G090LF1073051TKD", -48.0, score=0.8, floor_db=-68.0)
+        other = Claim(0.00, "G090LF09649200P3", level_other, score=0.9,
+                      floor_db=level_other - snr_other)
+        who, why = pick_nearest([living, other])
+        assert who.device_id == "G090LF1073051TKD" and why == "loudest"
+
+
 def test_echo_cases():
     quiet = Claim(0.0, "quiet", -60.0, score=0.9, floor_db=-80.0)
     echo = Claim(0.02, "echo", -20.0, score=0.99, floor_db=-80.0,

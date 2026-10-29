@@ -63,6 +63,8 @@ OPTION_ENV_VARS = {
     "arbitration_room_offsets_db": "EM_ARBITRATION_ROOM_OFFSETS_DB",
     "echo_margin_db": "EM_ECHO_MARGIN_DB",
     "echo_solo_min_score": "EM_ECHO_SOLO_MIN_SCORE",
+    "arbitration_min_snr_db": "EM_ARBITRATION_MIN_SNR_DB",
+    "echo_handoff_margin_db": "EM_ECHO_HANDOFF_MARGIN_DB",
     "arb_score_mode": "EM_ARB_SCORE_MODE",
     "loser_cooldown_mode": "EM_LOSER_COOLDOWN_MODE",
     "loser_cooldown_s": "EM_LOSER_COOLDOWN_S",

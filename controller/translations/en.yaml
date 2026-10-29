@@ -161,8 +161,22 @@ configuration:
   echo_solo_min_score:
     name: Echo solo minimum score
     description: >-
-      The wake score a lone echo-suspect claim needs in order to answer.
-      0.85. Below that, nobody answers.
+      The wake score an echo-suspect Dot needs in order to answer when no
+      other Dot heard the user well enough. 0.85. A second-stage accept
+      can also keep that Dot. Otherwise nobody answers.
+  arbitration_min_snr_db:
+    name: Minimum SNR to take an echo handoff (dB)
+    description: >-
+      When the loudest Dot looks like its own playback, another Dot can
+      take the turn only if its adjusted SNR is at least this, or its
+      level is within the echo handoff margin. 2. Set this to 0 to hand
+      the turn to any quieter Dot, which is the 2.26.8 rule.
+  echo_handoff_margin_db:
+    name: Echo handoff margin (dB)
+    description: >-
+      How close another Dot's level must be to an echo-flagged louder Dot
+      before it can take the turn without meeting the minimum SNR. 6. A
+      very large value restores the 2.26.8 handoff.
   arbitration_early_ms:
     name: Arbitration early exit (milliseconds)
     description: >-
