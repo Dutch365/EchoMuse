@@ -152,6 +152,13 @@ options:
   # large handoff margin restore the 2.26.8 handoff.
   arbitration_min_snr_db: 2
   echo_handoff_margin_db: 6
+  # A suspect claim with no playback reference that leads the best clean
+  # claim by more than this, and scores at echo_solo_min_score, stays in
+  # the contest. Below it the handoff stands.
+  echo_override_db: 10
+  # Milliseconds after this Dot's own playback ends during which a wake
+  # is still "over playback". A barge flag later than this is ignored.
+  playback_tail_ms: 500
   # A lone claim leaves at arbitration_early_ms only when its SNR is at
   # least this and it is not an echo. Below the bar the contest waits out
   # the hold. Off restores the arrival-based early exit.
@@ -241,6 +248,8 @@ schema:
   echo_solo_min_score: "float(0,1)"
   arbitration_min_snr_db: "float(0,40)"
   echo_handoff_margin_db: "float(0,80)"
+  echo_override_db: "float(0,80)"
+  playback_tail_ms: "int(0,5000)"
   arbitration_early_snr_gate: "bool"
   arbitration_early_min_snr_db: "float(0,80)"
   arbitration_takeover: "bool"
