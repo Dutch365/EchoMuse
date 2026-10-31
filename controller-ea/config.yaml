@@ -281,4 +281,4 @@ schema:
   wake_verify_url: "str"
   wake_verify_timeout_ms: "int(50,2000)"
   wake_verify_on_error: "list(accept|reject)"
-  internal_install_secret: "str?"
+  internal_install_secret: "password?"
