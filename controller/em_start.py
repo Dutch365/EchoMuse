@@ -93,6 +93,7 @@ OPTION_ENV_VARS = {
     "wake_verify_url": "WAKE_VERIFY_URL",
     "wake_verify_timeout_ms": "WAKE_VERIFY_TIMEOUT_MS",
     "wake_verify_on_error": "WAKE_VERIFY_ON_ERROR",
+    "internal_install_secret": "INTERNAL_INSTALL_SECRET",
 }
 
 def apply_options(options: dict) -> None:
