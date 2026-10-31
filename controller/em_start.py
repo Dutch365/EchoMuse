@@ -65,6 +65,8 @@ OPTION_ENV_VARS = {
     "echo_solo_min_score": "EM_ECHO_SOLO_MIN_SCORE",
     "arbitration_min_snr_db": "EM_ARBITRATION_MIN_SNR_DB",
     "echo_handoff_margin_db": "EM_ECHO_HANDOFF_MARGIN_DB",
+    "echo_override_db": "EM_ECHO_OVERRIDE_DB",
+    "playback_tail_ms": "EM_PLAYBACK_TAIL_MS",
     "arbitration_early_snr_gate": "EM_ARBITRATION_EARLY_SNR_GATE",
     "arbitration_early_min_snr_db": "EM_ARBITRATION_EARLY_MIN_SNR_DB",
     "arbitration_takeover": "EM_ARBITRATION_TAKEOVER",

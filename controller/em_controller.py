@@ -1313,19 +1313,9 @@ class Device:
         appeared only when the dashboard's 5s poll of /api/devices happened to
         land mid-playback, which for a typical ~2s response it usually did not.
 
-        WHEN each edge fires, and how true each is:
-
-        - **False is device truth.** The playback functions wait on the
-          device's own `playback_stats`, sent once its audio channel drains
-          after EOS, and clear the flag there.
-        - **True is still a controller-side ESTIMATE** — the first period put
-          on the wire. The device holds audio until roughly
-          SPEAKER_PRIME_SECONDS is queued (primePeriods, pcm_speaker.go), so
-          the tile leads the speaker by up to that much. Closing that gap needs
-          the DEVICE to report the moment it starts, which no released firmware
-          does; `playback_stats` is the only playback message it sends.
-
-        Guarded rather than plain, because one caller is stream_speaker's
+        False waits on the device's playback_stats. True is the first
+        period on the wire, ahead of the speaker by the prime. Guarded
+        rather than plain, because one caller is stream_speaker's
         finally, which is also reached when barge-in cancels the task
         mid-send: the flag assignment is synchronous and always happens, and a
         push that cannot complete is not worth failing a speaker stream over —
@@ -1337,6 +1327,9 @@ class Device:
         # Monotonic start of this True. The 30s watchdog reads it; a second
         # True does not refresh it, because that return is above.
         self.speaking_since = time.monotonic() if value else None
+        # Loop clock when speaking last cleared. playback_still_counts
+        # ignores a barge flag once this is older than playback_tail_s.
+        self.playback_idle_at = None if value else asyncio.get_event_loop().time()
         if value:
             # Mutually exclusive phases. Leaving `thinking` set meant the tile
             # FELL BACK to Thinking the moment speaking cleared, instead of
@@ -3289,7 +3282,10 @@ async def _claim_wake(device: "Device", heard_at: float | None,
         won_by = await em_state.wake_arbiter.contest(
             device.device_id, device.wake_arb_ms / 1000.0,
             heard_at=heard_at, slack_s=_arbitration_slack(), hold_s=hold,
-            level=level_db, gains=device.adc_gains, over_playback=over_playback,
+            level=level_db, gains=device.adc_gains,
+            over_playback=over_playback and em_arbiter.playback_still_counts(
+                getattr(device, "playback_idle_at", None), heard_at,
+                nearest["playback_tail_s"]),
             score=score, floor_db=floor_db, early_s=em_listen.arbitration_early(),
             mode=nearest["mode"],
             min_wait_s=nearest["min_wait_s"],
@@ -3302,7 +3298,9 @@ async def _claim_wake(device: "Device", heard_at: float | None,
             echo_handoff_margin_db=nearest["echo_handoff_margin_db"],
             verify_accept=em_wakeverify.accepted,
             log_path=nearest["log_path"],
-            room=getattr(device, "label", "") or "", **em_arbiter.contest_switches(nearest),
+            room=getattr(device, "label", "") or "",
+            leo_self=em_arbiter.leo_self_of(device.device_id),
+            **em_arbiter.contest_switches(nearest),
         )
         em_reliability.note_claim(device, won_by, level_db, floor_db)
     now = asyncio.get_event_loop().time()

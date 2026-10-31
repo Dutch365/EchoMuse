@@ -216,6 +216,17 @@ configuration:
       How close another Dot's level must be to an echo-flagged louder Dot
       before it can take the turn without meeting the minimum SNR. 6. A
       very large value restores the 2.26.8 handoff.
+  echo_override_db:
+    name: Echo override (dB)
+    description: >-
+      A wake flagged over playback, with no playback reference, that is
+      this many dB above the best clean claim and scores at the solo bar
+      stays eligible. 10. Below that the handoff stands.
+  playback_tail_ms:
+    name: Playback tail (milliseconds)
+    description: >-
+      How long after this Dot's own playback ends a wake still counts as
+      over playback. 500. A barge flag later than this is ignored.
   arbitration_early_ms:
     name: Arbitration early exit (milliseconds)
     description: >-

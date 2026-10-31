@@ -906,3 +906,81 @@ def test_a_held_contest_without_levels_still_goes_to_the_first_to_hear():
         return await a, await b
     assert run(main()) == ("a", "a")
 
+
+def _contest_142():
+    """6:15:15. Kitchen adj SNR 12.5, score 0.988, barge still set,
+    playback_ref absent. Living Room 5.8 dB. Levels are the logged
+    loudness (-44.3 vs -57.7). Floors reconstruct those SNRs."""
+    kitchen = Claim(
+        0.00, "kitchen", -44.3, score=0.988, floor_db=-56.8,
+        over_playback=True, playback_ref=None, room="Kitchen")
+    living = Claim(
+        0.05, "living_room", -57.7, score=0.90, floor_db=-63.5,
+        room="Living Room")
+    return kitchen, living
+
+
+def test_contest_142_kitchen_wins_once_playback_has_been_over_for_500ms():
+    from em_arbiter import playback_still_counts
+    kitchen, living = _contest_142()
+    assert abs((kitchen.level - kitchen.floor_db) - 12.5) < 0.05
+    assert abs((living.level - living.floor_db) - 5.8) < 0.05
+    # Playback complete 1.9 s before the wake. The barge flag is stale.
+    assert playback_still_counts(0.0, 1.9, 0.5) is False
+    assert playback_still_counts(0.0, 0.5, 0.5) is True
+    assert playback_still_counts(None, 1.9, 0.5) is True
+    cleared = kitchen._replace(over_playback=False)
+    who, why = pick_nearest([cleared, living])
+    assert who.device_id == "kitchen" and why == "loudest"
+
+
+def test_a_suspect_without_playback_ref_far_above_a_clean_claim_stays():
+    """More than echo_override_db (10) above the best clean claim, score
+    at the solo bar, no playback reference: the person, not an echo."""
+    kitchen, living = _contest_142()
+    # 6.7 dB is inside the override, so today's handoff still gives it away.
+    who, why = pick_nearest([kitchen, living])
+    assert who.device_id == "living_room"
+    louder = kitchen._replace(level=-44.3, floor_db=-67.0)  # SNR 22.7, lead 16.9
+    who, why = pick_nearest([louder, living])
+    assert who.device_id == "kitchen" and why == "loudest"
+    short = louder._replace(score=0.50)
+    who, why = pick_nearest([short, living])
+    assert who.device_id == "living_room"
+
+
+def test_a_leo_self_claim_never_wins_and_family_audio_still_can():
+    """Addendum A. Leo's own voice is a false wake. A louder Dot whose
+    audio matches leo_self loses to a quieter person. A family vector
+    stays under the match bar and can still win."""
+    from em_arbiter import match_leo_self
+    leo = (1.0, 0.0, 0.0)
+    family = (0.0, 1.0, 0.0)
+    assert match_leo_self(leo, leo, threshold=0.75) is True
+    assert match_leo_self(family, leo, threshold=0.75) is False
+    person = Claim(0.02, "kitchen", -50.0, score=0.80, floor_db=-70.0)
+    own_voice = Claim(
+        0.00, "living_room", -30.0, score=0.99, floor_db=-70.0,
+        leo_self=True)
+    who, why = pick_nearest([own_voice, person])
+    assert who.device_id == "kitchen" and why == "only"
+    who, why = pick_nearest([own_voice])
+    assert who is None and why == "leo_self"
+    # The override must not put Leo's voice back in.
+    flagged = own_voice._replace(over_playback=True, playback_ref=None)
+    who, why = pick_nearest([flagged, person])
+    assert who.device_id == "kitchen" and why == "only"
+    heard = person._replace(device_id="family", level=-40.0)
+    assert pick_nearest([heard, person])[0].device_id == "family"
+
+
+def test_a_true_echo_within_6db_of_playback_ref_still_loses():
+    echo = Claim(
+        0.00, "echo", -30.0, score=0.99, floor_db=-80.0,
+        over_playback=True, playback_ref=-28.0)
+    clean = Claim(0.02, "clean", -50.0, score=0.80, floor_db=-80.0)
+    assert abs(echo.level - echo.playback_ref) <= 6
+    assert (echo.level - echo.floor_db) - (clean.level - clean.floor_db) > 10
+    who, why = pick_nearest([echo, clean])
+    assert who.device_id == "clean" and why == "loudest"
+
