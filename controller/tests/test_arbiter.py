@@ -949,6 +949,31 @@ def test_a_suspect_without_playback_ref_far_above_a_clean_claim_stays():
     assert who.device_id == "living_room"
 
 
+def test_a_leo_self_claim_never_wins_and_family_audio_still_can():
+    """Addendum A. Leo's own voice is a false wake. A louder Dot whose
+    audio matches leo_self loses to a quieter person. A family vector
+    stays under the match bar and can still win."""
+    from em_arbiter import match_leo_self
+    leo = (1.0, 0.0, 0.0)
+    family = (0.0, 1.0, 0.0)
+    assert match_leo_self(leo, leo, threshold=0.75) is True
+    assert match_leo_self(family, leo, threshold=0.75) is False
+    person = Claim(0.02, "kitchen", -50.0, score=0.80, floor_db=-70.0)
+    own_voice = Claim(
+        0.00, "living_room", -30.0, score=0.99, floor_db=-70.0,
+        leo_self=True)
+    who, why = pick_nearest([own_voice, person])
+    assert who.device_id == "kitchen" and why == "only"
+    who, why = pick_nearest([own_voice])
+    assert who is None and why == "leo_self"
+    # The override must not put Leo's voice back in.
+    flagged = own_voice._replace(over_playback=True, playback_ref=None)
+    who, why = pick_nearest([flagged, person])
+    assert who.device_id == "kitchen" and why == "only"
+    heard = person._replace(device_id="family", level=-40.0)
+    assert pick_nearest([heard, person])[0].device_id == "family"
+
+
 def test_a_true_echo_within_6db_of_playback_ref_still_loses():
     echo = Claim(
         0.00, "echo", -30.0, score=0.99, floor_db=-80.0,

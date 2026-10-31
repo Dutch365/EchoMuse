@@ -9,6 +9,7 @@ A reply that has already finished no longer looks like playback, so the Dot that
 - A wake more than `playback_tail_ms` (500 ms) after this Dot's own playback ended is not marked over playback, even when the device barge flag is still set. The idle time is the loop clock when `speaking` clears at playback complete.
 - In nearest mode, a suspect claim with no playback reference that leads the best clean claim by more than `echo_override_db` (10 dB) and scores at least `echo_solo_min_score` stays eligible. A claim within `echo_margin_db` of a playback reference still loses to a clean claim. Set `echo_override_db` to 0 to keep every such suspect out.
 - Rollback: install 2.26.10. The two new options are unused there. On this build, `playback_tail_ms: 0` keeps the barge flag, and `echo_override_db: 0` keeps the handoff.
+- A claim marked `leo_self` (cosine match at or above 0.75 against Leo's voice centroid) never wins nearest arbitration. If every claim is Leo's voice, nobody answers (`leo_self`). A family vector under the bar is unchanged. `note_leo_self` is what the scorer calls before the claim; nothing here plays audio.
 
 ## 2.26.10
 

@@ -167,6 +167,21 @@ DEFAULT_LOG = "/share/leo/logs/wake-arbitration.jsonl"
 # Assigned by em_reliability. This module does not import that one.
 score_hook = None
 
+# device_id -> this wake's audio matched leo_self. Cleared when it does not.
+_leo_self_hits: dict = {}
+
+
+def note_leo_self(device_id: str, matched: bool) -> None:
+    """Record a leo_self match for the next claim from this Dot."""
+    if matched:
+        _leo_self_hits[device_id] = True
+    else:
+        _leo_self_hits.pop(device_id, None)
+
+
+def leo_self_of(device_id: str) -> bool:
+    return bool(_leo_self_hits.get(device_id))
+
 
 class Claim(NamedTuple):
     heard: float
@@ -190,6 +205,8 @@ class Claim(NamedTuple):
     # Another Dot, or a same-room player, was playing.
     external_playing: bool = False
     room: str = ""
+    # This Dot's audio matched Leo's own voice. Never the winner.
+    leo_self: bool = False
 
 
 def _primary(claim: Claim, use_snr: bool) -> float:
@@ -361,6 +378,22 @@ def nearest_close(heard: float, arrived: float, hold_s: float,
     return close
 
 
+def match_leo_self(vec, centroid, threshold: float = 0.75) -> bool:
+    """Cosine match against the leo_self centroid. At or above the bar is Leo.
+
+    A different speaker, a length mismatch, or a zero vector is not a match,
+    so a family clip is not rejected.
+    """
+    if not vec or not centroid or len(vec) != len(centroid):
+        return False
+    dot = sum(a * b for a, b in zip(vec, centroid))
+    na = sum(a * a for a in vec) ** 0.5
+    nb = sum(b * b for b in centroid) ** 0.5
+    if na == 0.0 or nb == 0.0:
+        return False
+    return (dot / (na * nb)) >= threshold
+
+
 def _metric(claim: Claim, use_snr: bool, offsets: dict) -> float:
     base = (claim.level - claim.floor_db) if use_snr else claim.level
     return base + float(offsets.get(claim.device_id, 0.0) or 0.0)
@@ -448,6 +481,9 @@ def pick_nearest(claims: list, offsets: dict | None = None,
     finished; a missing result does not answer.
     """
     offsets = offsets or {}
+    claims = [c for c in claims if not c.leo_self]
+    if not claims:
+        return None, "leo_self"
     earliest = min(claims, key=lambda c: (c.heard, c.device_id))
     if any(c.level is None for c in claims):
         return earliest, "fallback:no-level"
@@ -802,6 +838,7 @@ class WakeArbiter:
                       verify_accept=None,
                       log_path: str | None = None,
                       room: str = "",
+                      leo_self: bool = False,
                       early_snr_gate: bool = True,
                       early_min_snr_db: float = DEFAULT_EARLY_MIN_SNR_DB,
                       takeover: bool = True,
@@ -831,7 +868,7 @@ class WakeArbiter:
 
         fresh = Claim(
             heard, device_id, level, gains, over_playback, score, floor_db,
-            peak, now, playback_ref, external_playing, room)
+            peak, now, playback_ref, external_playing, room, leo_self)
         if self._contest is not None:
             opened, entries, decided = self._contest
             if abs(heard - opened) < window_s:
