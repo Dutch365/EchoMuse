@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.26.12
+
+### Fixed
+
+- websockets 17.4. Releases through 17.3 let any client on the LAN exhaust memory (GHSA-6m5v-9gmr-5665). 17.4 is the fixed release. Rollback: install 2.26.11.
+
 ## 2.26.11
 
 A reply that has already finished no longer looks like playback, so the Dot that heard the person keeps the turn.
