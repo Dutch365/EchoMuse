@@ -350,3 +350,11 @@ configuration:
       or returns something other than {"accept": true/false}. reject drops
       that wake. The default is accept, so a checker that is down does not
       silence the house.
+  internal_install_secret:
+    name: Internal wake-model install secret
+    description: >-
+      Shared secret for another add-on on the Home Assistant internal
+      network to install one openWakeWord model onto chosen Dots. Leave
+      empty to disable that call. Set the same value in both add-ons.
+      It does not grant the dashboard or any other route. The value is
+      not written to the log.

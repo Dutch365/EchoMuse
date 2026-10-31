@@ -32,6 +32,10 @@ PUBLIC = {
 # they authenticate inside the handler (see _ws_shell's docstring).
 WS_SELF_AUTH = {"_ws_shell", "_ws_events"}
 
+# One route, one secret, one subnet. Not a session and not an admin bypass.
+# tests/test_internal_oww_install.py is the behaviour.
+INTERNAL_INSTALL = {"_post_internal_oww_install"}
+
 DECORATORS = {"require_auth", "require_admin"}
 
 
@@ -103,7 +107,7 @@ def test_every_route_is_authenticated_or_named_public():
     missing = []
     for name, path in sorted(_routes().items()):
         assert name in fns, f"route {path} -> {name}: handler not found"
-        if name in PUBLIC or name in WS_SELF_AUTH:
+        if name in PUBLIC or name in WS_SELF_AUTH or name in INTERNAL_INSTALL:
             continue
         if not (_decorators(fns[name]) & DECORATORS):
             missing.append(f"{path} ({name})")
@@ -124,7 +128,7 @@ def test_websocket_handlers_authenticate_themselves():
 def test_public_list_names_real_routes():
     # A stale entry is an exemption waiting for a new handler to inherit it.
     routes = _routes()
-    assert not (PUBLIC | WS_SELF_AUTH) - set(routes)
+    assert not (PUBLIC | WS_SELF_AUTH | INTERNAL_INSTALL) - set(routes)
 
 
 def test_oww_assets_and_controller_release_need_a_session():

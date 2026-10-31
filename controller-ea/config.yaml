@@ -219,6 +219,11 @@ options:
   wake_verify_timeout_ms: 300
   # accept: a timeout or an error still wakes. reject: drop the wake.
   wake_verify_on_error: "accept"
+  # Shared with the add-on that installs a wake model on chosen Dots.
+  # Empty disables POST /api/internal/oww_install. The value is compared
+  # and then discarded; it is not logged and it does not grant any other
+  # route.
+  internal_install_secret: ""
 schema:
   server_host: "str"
   server_ip: "str"
@@ -276,3 +281,4 @@ schema:
   wake_verify_url: "str"
   wake_verify_timeout_ms: "int(50,2000)"
   wake_verify_on_error: "list(accept|reject)"
+  internal_install_secret: "str?"

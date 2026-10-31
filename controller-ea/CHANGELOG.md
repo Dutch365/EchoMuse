@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.26.13
+
+### Added
+
+- `POST /api/internal/oww_install` stores one `.onnx` wake model and points each named Dot at it. The caller must be on `172.30.32.0/23` and send the add-on option `internal_install_secret`. Empty leaves the call disabled. Ingress and the dashboard session are unchanged. Set the same secret in the calling add-on.
+- A Dot whose asset install or config read-back fails stays on its previous model. The response lists `{id, ok, stage_failed?, readback_ok}` per Dot.
+- Rollback: install 2.26.12. If that websockets build is not installed, roll back to 2.26.11.
+
 ## 2.26.12
 
 ### Fixed

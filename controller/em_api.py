@@ -51,6 +51,7 @@ import em_tasks
 import em_tcp
 import em_firmware
 import em_ingressauth
+import em_internal_install
 import em_routes_activity
 import em_routes_auth
 import em_routes_config
@@ -58,6 +59,7 @@ import em_routes_devices
 import em_routes_events
 import em_routes_link
 import em_routes_oww
+import em_routes_internal
 import em_routes_provision
 import em_routes_shell
 import em_routes_static
@@ -115,6 +117,7 @@ async def create_app() -> web.Application:
     em_routes_activity.register(app)
 
     em_routes_oww.register(app)
+    em_routes_internal.register(app)
     em_routes_shell.register(app)
 
     # Updates: firmware, emOS, releases, the controller release notice
@@ -154,6 +157,14 @@ async def _ingress_only_middleware(request: web.Request, handler):
     """
     if (em_ingressauth.INGRESS_ONLY
             and request.remote != em_ingressauth.INGRESS_GATEWAY_IP):
+        # The internal install route is the one caller that is not ingress.
+        # It still has to be on the Home Assistant network; the handler
+        # rejects every other peer, and rejects this path when it arrives
+        # through ingress. Any other path keeps the gateway-only rule.
+        if (request.method == "POST"
+                and request.path == "/api/internal/oww_install"
+                and em_internal_install.peer_in_ha_net(request.remote)):
+            return await handler(request)
         log.warning("Rejected non-ingress request from %s", request.remote)
         raise web.HTTPForbidden(text="Home Assistant Ingress is required")
     return await handler(request)
