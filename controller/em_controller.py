@@ -5423,6 +5423,14 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
             await start_timer_alarm(_d)
         async def _stop_alarm(_d=_device_ref) -> None:
             await stop_timer_alarm(_d)
+        async def _countdown_led(total: int, left: int, _d=_device_ref) -> None:
+            if not _d.led_anim_capable:
+                return
+            await _d.send_led_anim(em_timers.countdown_anim(total, left))
+        async def _clear_countdown_led(_d=_device_ref) -> None:
+            if not _d.led_anim_capable:
+                return
+            await _d.send_led_anim({"pattern": "off"})
         async def _start_conversation(_d=_device_ref) -> None:
             # HA has finished asking; the answer is whatever is said next.
             # Same shape as the button turn — a deliberate act with no wake
@@ -5520,6 +5528,8 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
             send_volume_set=_send_volume_set,
             ring_alarm=_ring_alarm,
             stop_alarm=_stop_alarm,
+            countdown_led=_countdown_led,
+            clear_countdown_led=_clear_countdown_led,
             start_conversation=_start_conversation,
             set_wake_word=_set_wake_word,
             wake_word_enabled=device.wake_word_enabled,

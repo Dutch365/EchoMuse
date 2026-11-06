@@ -19,8 +19,9 @@ import (
 type AnimSpec struct {
 	// Pattern: "off", "solid", "spin" (head+trail dot), "rotate" (palette
 	// rotates around the ring — the pride spinner), "pulse" (sinusoidal
-	// throb), or "meter" (brightness follows the live speaker RMS — the
-	// ring throbs with the response being played).
+	// throb), "meter" (brightness follows the live speaker RMS — the
+	// ring throbs with the response being played), or "countdown" (N-of-12
+	// shrinking arc for a kitchen timer; tip blinks near the end).
 	Pattern string `json:"pattern"`
 	// Colors semantics per pattern:
 	//   solid        — palette painted 1:1 (1 colour = whole ring, else per-LED)
@@ -55,6 +56,15 @@ type AnimSpec struct {
 	Gamma  *float64 `json:"gamma"`  // output gamma; >1 expands the dark end
 	Ref    *float64 `json:"ref"`    // RMS mapped to full scale
 	Curve  *float64 `json:"curve"`  // input exponent; <1 lifts quiet detail
+
+	// ── countdown-only (kitchen timer shrinking arc) ─────────────────────
+	// Device-local: remainingSec is the value at the moment the spec arrives;
+	// the device then ticks remaining down from totalSec so Wi-Fi jitter does
+	// not judder the ring (same idea as volume N-of-12 in volume.go).
+	TotalSec     int      `json:"totalSec"`
+	RemainingSec int      `json:"remainingSec"`
+	BlinkFraction *float64 `json:"blinkFraction"` // last fraction of duration; nil → 0.10
+	BlinkFloorSec *int     `json:"blinkFloorSec"` // min blink window seconds; nil → 15
 }
 
 // meterDefaults are the shipped response curve. Derived in
@@ -130,6 +140,8 @@ func (s *Server) StartAnim(spec AnimSpec) {
 		go s.runPulse(gen, spec)
 	case "meter":
 		go s.runMeter(gen, spec)
+	case "countdown":
+		go s.runCountdown(gen, spec)
 	default:
 		log.Printf("StartAnim: unknown pattern %q — clearing ring", spec.Pattern)
 		s.SetLEDs(blackFrame(), boolPtr(false))
@@ -281,6 +293,157 @@ func (s *Server) runMeter(gen int, spec AnimSpec) {
 		// behaviour) is what made the throb near-invisible.
 		b := math.Pow(floor+span*env, gamma)
 		s.SetLEDs(scaleFrame(base, b), boolPtr(false))
+		<-ticker.C
+	}
+}
+
+
+// countdownDefaults match hv-086 / Shawn tip-blink: last 10% of duration,
+// floored at 15s, so a short timer still blinks near the end.
+const (
+	countdownDefaultBlinkFraction = 0.10
+	countdownDefaultBlinkFloorSec = 15
+	countdownTick                 = 200 * time.Millisecond
+)
+
+func resolveCountdownBlink(spec AnimSpec, totalSec int) (fraction float64, floorSec int) {
+	fraction = countdownDefaultBlinkFraction
+	if spec.BlinkFraction != nil {
+		fraction = math.Min(1, math.Max(0, *spec.BlinkFraction))
+	}
+	floorSec = countdownDefaultBlinkFloorSec
+	if spec.BlinkFloorSec != nil {
+		floorSec = *spec.BlinkFloorSec
+		if floorSec < 0 {
+			floorSec = 0
+		}
+	}
+	_ = totalSec
+	return
+}
+
+// countdownLitCount is the N-of-12 lit arc for a running timer — same idea as
+// volume showLEDs. While any time remains, at least one LED stays lit so the
+// tip is still visible; at or below zero the ring is dark.
+func countdownLitCount(totalSec, remainingSec int) int {
+	if totalSec <= 0 || remainingSec <= 0 {
+		return 0
+	}
+	if remainingSec >= totalSec {
+		return 12
+	}
+	lit := int(math.Round(float64(remainingSec) / float64(totalSec) * 12.0))
+	if lit < 1 {
+		lit = 1
+	}
+	if lit > 12 {
+		lit = 12
+	}
+	return lit
+}
+
+// countdownBlinkThreshold is when the tip starts blinking: max(floor,
+// ceil(fraction*total)), capped at total so a tiny timer still blinks.
+func countdownBlinkThreshold(totalSec int, fraction float64, floorSec int) int {
+	if totalSec <= 0 {
+		return 0
+	}
+	th := int(math.Ceil(float64(totalSec) * fraction))
+	if th < floorSec {
+		th = floorSec
+	}
+	if th > totalSec {
+		th = totalSec
+	}
+	return th
+}
+
+// countdownFrame paints the first `lit` LEDs in colour; when blinkTip is set
+// the last lit LED is dark (for the blink off-phase).
+func countdownFrame(lit int, colour [3]uint8, blinkTipOff bool) []led.Led {
+	frame := blackFrame()
+	if lit <= 0 {
+		return frame
+	}
+	if lit > 12 {
+		lit = 12
+	}
+	for i := 0; i < lit; i++ {
+		if blinkTipOff && i == lit-1 {
+			continue
+		}
+		frame[i] = led.Led{ID: i, R: colour[0], G: colour[1], B: colour[2]}
+	}
+	return frame
+}
+
+// runCountdown shrinks an N-of-12 arc as the timer elapses and blinks the tip
+// in the last blink window. Mute / volume-arc suppression still apply via SetLEDs.
+func (s *Server) runCountdown(gen int, spec AnimSpec) {
+	total := spec.TotalSec
+	if total <= 0 {
+		total = spec.RemainingSec
+	}
+	if total <= 0 {
+		log.Printf("led_anim: countdown with no total/remaining — clearing ring")
+		if s.animCurrent(gen) {
+			s.SetLEDs(blackFrame(), boolPtr(false))
+		}
+		return
+	}
+	remainingAtStart := spec.RemainingSec
+	if remainingAtStart <= 0 || remainingAtStart > total {
+		remainingAtStart = total
+	}
+	fraction, floorSec := resolveCountdownBlink(spec, total)
+	blinkAt := countdownBlinkThreshold(total, fraction, floorSec)
+
+	var colour [3]uint8 = [3]uint8{255, 214, 170} // soft warm white; not mute-red / link-orange / volume-cyan / finished amber
+	if len(spec.Colors) > 0 {
+		colour = spec.Colors[0]
+	}
+
+	var deadline time.Time
+	if spec.TTLSec > 0 {
+		deadline = time.Now().Add(time.Duration(spec.TTLSec) * time.Second)
+	}
+
+	started := time.Now()
+	// Elapsed already consumed before this spec arrived.
+	already := time.Duration(total-remainingAtStart) * time.Second
+
+	ticker := time.NewTicker(countdownTick)
+	defer ticker.Stop()
+
+	for {
+		if !s.animCurrent(gen) {
+			return
+		}
+		if !deadline.IsZero() && time.Now().After(deadline) {
+			log.Printf("led_anim: countdown TTL expired — clearing ring")
+			if s.animCurrent(gen) {
+				s.SetLEDs(blackFrame(), boolPtr(false))
+			}
+			return
+		}
+		elapsed := already + time.Since(started)
+		remainSec := total - int(elapsed.Seconds())
+		if remainSec < 0 {
+			remainSec = 0
+		}
+		lit := countdownLitCount(total, remainSec)
+		blinkTipOff := false
+		if remainSec > 0 && remainSec <= blinkAt {
+			// ~2 Hz blink on the tip so the last lit bit is still findable.
+			phase := int(elapsed/time.Millisecond) / 250
+			blinkTipOff = phase%2 == 1
+		}
+		s.SetLEDs(countdownFrame(lit, colour, blinkTipOff), boolPtr(false))
+		if remainSec <= 0 {
+			// Finished: leave the ring dark; controller FINISHED path may
+			// replace this with TIMER_ANIM pulse.
+			return
+		}
 		<-ticker.C
 	}
 }

@@ -87,6 +87,67 @@ TIMER_ANIM = {
 }
 
 
+
+# Soft warm-white countdown while a timer is RUNNING — distinct from the
+# finished amber TIMER_ANIM pulse, mute-red, link-orange, and volume-cyan.
+COUNTDOWN_COLOR = [255, 214, 170]
+COUNTDOWN_BLINK_FRACTION = 0.10
+COUNTDOWN_BLINK_FLOOR_SEC = 15
+
+
+def countdown_anim(
+    total_seconds: int,
+    seconds_left: int,
+    *,
+    blink_fraction: float = COUNTDOWN_BLINK_FRACTION,
+    blink_floor_sec: int = COUNTDOWN_BLINK_FLOOR_SEC,
+    ttl_sec: int | None = None,
+) -> dict:
+    """
+    led_anim spec for a shrinking N-of-12 kitchen-timer ring.
+
+    The device renders locally from totalSec + remainingSec (hv-086). ttlSec
+    is a dead-man a little past the remaining time so a lost UPDATED/FINISHED
+    cannot leave the ring lit forever.
+    """
+    total = max(0, int(total_seconds or 0))
+    left = max(0, int(seconds_left or 0))
+    if total <= 0:
+        total = left
+    if left > total:
+        left = total
+    if ttl_sec is None:
+        # remaining + 30s cushion, at least 60s so a long timer keeps getting
+        # refreshed by UPDATED events before expiry.
+        ttl_sec = max(60, left + 30)
+    return {
+        "pattern": "countdown",
+        "colors": [list(COUNTDOWN_COLOR)],
+        "totalSec": total,
+        "remainingSec": left,
+        "blinkFraction": float(blink_fraction),
+        "blinkFloorSec": int(blink_floor_sec),
+        "ttlSec": int(ttl_sec),
+    }
+
+
+def blink_threshold(
+    total_seconds: int,
+    blink_fraction: float = COUNTDOWN_BLINK_FRACTION,
+    blink_floor_sec: int = COUNTDOWN_BLINK_FLOOR_SEC,
+) -> int:
+    """Seconds remaining at which the tip starts blinking."""
+    total = max(0, int(total_seconds or 0))
+    if total <= 0:
+        return 0
+    import math
+    th = int(math.ceil(total * float(blink_fraction)))
+    if th < int(blink_floor_sec):
+        th = int(blink_floor_sec)
+    if th > total:
+        th = total
+    return th
+
 class TimerRegistry:
     """
     Per-device timer state, driven by VoiceAssistantTimerEventResponse events.

@@ -1,8 +1,8 @@
 """
 Internal wake-word install for another Home Assistant add-on.
 
-POST /api/internal/oww_install is the only route that accepts
-internal_install_secret. It is not an admin session and it is not
+POST /api/internal/oww_install and POST /api/internal/led_countdown
+accept internal_install_secret. It is not an admin session and it is not
 ingress. The gates in `_refuse_before_body` run before the body is read.
 """
 
@@ -33,6 +33,7 @@ _DEVICES_FIELD_MAX = 65536
 
 def register(app: web.Application) -> None:
     app.router.add_post("/api/internal/oww_install", _post_internal_oww_install)
+    app.router.add_post("/api/internal/led_countdown", _post_internal_led_countdown)
 
 
 def _refuse_before_body(request: web.Request) -> web.Response | None:
@@ -259,3 +260,65 @@ async def _post_internal_oww_install(request: web.Request) -> web.Response:
     log.info("internal oww install stored %s for %d devices", fname, len(ids))
     devices = [await _install_one(device_id, path) for device_id in ids]
     return em_http.ok({"model": {"file": fname, "path": path}, "devices": devices})
+
+
+async def _post_internal_led_countdown(request: web.Request) -> web.Response:
+    """
+    hv-086: Leo hub drives a Dot LED countdown when the Grok path creates a
+    kitchen timer (Assist VoiceAssistantTimerEvent may not fire). Same secret
+    + HA-network gates as oww_install. Never flashes firmware — controller
+    paint only.
+
+    Body JSON: {device_id, action: start|update|cancel, total_sec?, remaining_sec?,
+                blink_fraction?, blink_floor_sec?}
+    """
+    refused = _refuse_before_body(request)
+    if refused is not None:
+        return refused
+    try:
+        body = await request.json()
+    except Exception:
+        return em_http.error("bad_request", "JSON body required", 400)
+    if not isinstance(body, dict):
+        return em_http.error("bad_request", "JSON object required", 400)
+    device_id = str(body.get("device_id") or "").strip()
+    action = str(body.get("action") or "").strip().lower()
+    if not device_id or len(device_id) > 64:
+        return em_http.error("bad_request", "device_id required", 400)
+    if action not in ("start", "update", "cancel"):
+        return em_http.error("bad_request", "action must be start|update|cancel", 400)
+
+    import em_controller
+    import em_timers
+
+    device = em_controller.get_device(device_id)
+    if device is None:
+        return em_http.error("not_found", "device not connected", 404)
+    if not device.led_anim_capable:
+        return em_http.error("not_supported", "device has no led_anim", 409)
+
+    if action == "cancel":
+        await device.send_led_anim({"pattern": "off"})
+        return em_http.ok({"ok": True, "action": "cancel", "device_id": device_id})
+
+    total = int(body.get("total_sec") or body.get("total_seconds") or 0)
+    left = int(body.get("remaining_sec") or body.get("seconds_left") or 0)
+    if left <= 0 and total > 0:
+        left = total
+    if total <= 0 or left <= 0:
+        return em_http.error("bad_request", "total_sec and remaining_sec required", 400)
+    kw = {}
+    if body.get("blink_fraction") is not None:
+        kw["blink_fraction"] = float(body["blink_fraction"])
+    if body.get("blink_floor_sec") is not None:
+        kw["blink_floor_sec"] = int(body["blink_floor_sec"])
+    anim = em_timers.countdown_anim(total, left, **kw)
+    await device.send_led_anim(anim)
+    return em_http.ok({
+        "ok": True,
+        "action": action,
+        "device_id": device_id,
+        "total_sec": total,
+        "remaining_sec": left,
+    })
+
