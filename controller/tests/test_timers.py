@@ -201,3 +201,26 @@ def test_alert_sound_ships_with_its_licence():
     assert os.path.exists(licence), "bundled sound must ship with LICENSE.md"
     text = open(licence, encoding="utf-8").read()
     assert "CC BY" in text or "Creative Commons Attribution" in text
+
+
+def test_countdown_anim_shape_and_ttl():
+    anim = t.countdown_anim(600, 600)
+    assert anim["pattern"] == "countdown"
+    assert anim["totalSec"] == 600
+    assert anim["remainingSec"] == 600
+    assert anim["colors"] == [t.COUNTDOWN_COLOR]
+    assert anim["blinkFraction"] == t.COUNTDOWN_BLINK_FRACTION
+    assert anim["blinkFloorSec"] == t.COUNTDOWN_BLINK_FLOOR_SEC
+    assert anim["ttlSec"] >= 600  # cushion past remaining
+
+
+def test_countdown_anim_clamps_left_to_total():
+    anim = t.countdown_anim(60, 90)
+    assert anim["totalSec"] == 60
+    assert anim["remainingSec"] == 60
+
+
+def test_blink_threshold_fraction_and_floor():
+    assert t.blink_threshold(600) == 60
+    assert t.blink_threshold(60) == 15
+    assert t.blink_threshold(10) == 10

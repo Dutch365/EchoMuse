@@ -162,7 +162,10 @@ async def _ingress_only_middleware(request: web.Request, handler):
         # rejects every other peer, and rejects this path when it arrives
         # through ingress. Any other path keeps the gateway-only rule.
         if (request.method == "POST"
-                and request.path == "/api/internal/oww_install"
+                and request.path in (
+                    "/api/internal/oww_install",
+                    "/api/internal/led_countdown",
+                )
                 and em_internal_install.peer_in_ha_net(request.remote)):
             return await handler(request)
         log.warning("Rejected non-ingress request from %s", request.remote)

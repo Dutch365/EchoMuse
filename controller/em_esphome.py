@@ -2539,6 +2539,8 @@ class DeviceESPhomeServer:
         # callable() each; None when no device is connected.
         self._ring_alarm = None
         self._stop_alarm = None
+        self._countdown_led = None
+        self._clear_countdown_led = None
         # Injected by device_connected() — async callable() that runs one
         # voice turn nobody spoke a wake word for, for HA's announce-then-
         # listen. In em_controller for _standalone_play's reason: it drives the
@@ -2602,6 +2604,20 @@ class DeviceESPhomeServer:
             f"id={timer_id!r} name={name!r} left={seconds_left}s "
             f"→ ring={transition} (active={self._timers.active_count()})"
         )
+        # hv-086: shrinking countdown while running; clear on cancel when not
+        # ringing. FINISHED keeps the existing TIMER_ANIM pulse via _ring_alarm.
+        if event_type in (em_timers.TIMER_STARTED, em_timers.TIMER_UPDATED):
+            total = int(total_seconds or 0)
+            left = int(seconds_left or 0)
+            if left <= 0 and total > 0:
+                left = total
+            if total > 0 and left > 0 and self._countdown_led is not None:
+                await self._countdown_led(total, left)
+        elif event_type == em_timers.TIMER_CANCELLED and transition != em_timers.RING_STOP:
+            # Cancelled while still counting down — drop the arc immediately.
+            if self._clear_countdown_led is not None:
+                await self._clear_countdown_led()
+
         if transition == em_timers.RING_START and self._ring_alarm is not None:
             await self._ring_alarm()
         elif transition == em_timers.RING_STOP and self._stop_alarm is not None:
@@ -3310,6 +3326,8 @@ async def device_connected(
     send_volume_set=None,
     ring_alarm=None,
     stop_alarm=None,
+    countdown_led=None,
+    clear_countdown_led=None,
     start_conversation=None,
     set_wake_word=None,
     wake_word_enabled: bool = True,
@@ -3362,6 +3380,8 @@ async def device_connected(
     server._standalone_play = standalone_play
     server._send_volume_set = send_volume_set
     server._ring_alarm = ring_alarm
+    server._countdown_led = countdown_led
+    server._clear_countdown_led = clear_countdown_led
     server._stop_alarm = stop_alarm
     server._start_conversation = start_conversation
     server._set_wake_word = set_wake_word
@@ -3393,6 +3413,8 @@ async def device_disconnected(device_id: str) -> None:
     # a disconnected device. em_controller stops the ring task on its own side.
     server._timers.clear()
     server._ring_alarm = None
+    server._countdown_led = None
+    server._clear_countdown_led = None
     server._stop_alarm = None
     server._start_conversation = None
     server._set_wake_word = None

@@ -137,3 +137,57 @@ func TestMeterCurveIsVisiblyVaried(t *testing.T) {
 		t.Fatalf("peak not full brightness: %.3f", p)
 	}
 }
+
+func TestCountdownLitCount(t *testing.T) {
+	cases := []struct {
+		total, remain, want int
+	}{
+		{0, 0, 0},
+		{60, 0, 0},
+		{60, 60, 12},
+		{60, 30, 6},
+		{60, 1, 1},   // tip stays lit while any time remains
+		{120, 12, 1}, // round(12/120*12)=1
+		{100, 50, 6},
+		{10, 9, 11}, // round(0.9*12)=11
+	}
+	for _, c := range cases {
+		got := countdownLitCount(c.total, c.remain)
+		if got != c.want {
+			t.Fatalf("countdownLitCount(%d,%d)=%d want %d", c.total, c.remain, got, c.want)
+		}
+	}
+}
+
+func TestCountdownBlinkThreshold(t *testing.T) {
+	// 10% of 600s = 60 > floor 15 → 60
+	if th := countdownBlinkThreshold(600, 0.10, 15); th != 60 {
+		t.Fatalf("600s threshold=%d want 60", th)
+	}
+	// 10% of 60s = 6 < floor 15 → 15
+	if th := countdownBlinkThreshold(60, 0.10, 15); th != 15 {
+		t.Fatalf("60s threshold=%d want 15", th)
+	}
+	// tiny timer: floor capped at total
+	if th := countdownBlinkThreshold(10, 0.10, 15); th != 10 {
+		t.Fatalf("10s threshold=%d want 10", th)
+	}
+}
+
+func TestCountdownFrameTipBlink(t *testing.T) {
+	colour := [3]uint8{255, 214, 170}
+	on := countdownFrame(3, colour, false)
+	if on[0].R != 255 || on[1].R != 255 || on[2].R != 255 {
+		t.Fatalf("lit LEDs wrong: %+v", on[:3])
+	}
+	if on[3].R != 0 {
+		t.Fatalf("LED 3 should be dark")
+	}
+	off := countdownFrame(3, colour, true)
+	if off[0].R != 255 || off[1].R != 255 {
+		t.Fatalf("base lit wrong during blink-off")
+	}
+	if off[2].R != 0 || off[2].G != 0 || off[2].B != 0 {
+		t.Fatalf("tip should be dark in blink-off phase: %+v", off[2])
+	}
+}
