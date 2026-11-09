@@ -22,6 +22,7 @@ import aiohttp
 import em_db as db
 import em_dbwriter
 import em_events
+import em_emos_update
 import em_firmware
 from version import VERSION as CONTROLLER_VERSION
 from version import compare as _compare_versions
@@ -41,7 +42,12 @@ DOWNLOAD_MAX_FIELD_SIZE = 64 * 1024
 # tags, GHCR image only). /releases/latest returns whichever was published
 # most recently — fetch_firmware filters the list for the newest
 # release that is actually a device firmware release.
-GITHUB_API_URL = "https://api.github.com/repos/{repo}/releases?per_page=10"
+#
+# 100 is GitHub's maximum page. The newest GA release of each kind has to be
+# on this one page, and EA prereleases of firmware and emOS sit ahead of it:
+# at 10, the two EA releases of 2026-11-02 pushed emos-v0.10 to 12th and every
+# GA emOS install failed at Build emOS (#1090).
+GITHUB_API_URL = "https://api.github.com/repos/{repo}/releases?per_page=100"
 
 # How long to cache GitHub release info in memory (seconds).
 # DB is the persistent cache; this avoids hitting the DB on every
@@ -49,6 +55,11 @@ GITHUB_API_URL = "https://api.github.com/repos/{repo}/releases?per_page=10"
 _release_cache: dict = {}
 _release_cache_ts: float = 0.0
 RELEASE_CACHE_TTL = 60  # seconds
+
+# github.com answers an asset download with a 302 whose Content-Security-Policy
+# header is 9,243 bytes (measured 2026-10-24), and aiohttp refuses any header
+# over 8,190 by default, so every download failed before the redirect (#1021).
+DOWNLOAD_MAX_FIELD_SIZE = 64 * 1024
 
 # Controller releases are `controller-v*` TAGS with no GitHub Release behind
 # them — controller-release.yml publishes a GHCR image and nothing else (see
@@ -184,6 +195,26 @@ async def cached_firmware() -> Optional[dict]:
         return None
 
     return await fetch_firmware()
+
+
+async def firmware_to_install() -> Optional[dict]:
+    """
+    The release an install should send: asked of GitHub now, the cache only
+    if GitHub cannot answer.
+
+    cached_firmware refreshes by AGE, so a release published since the last
+    poll is invisible to it until the next one. Right after an add-on update
+    that is the release the user updated for: on 2026-11-03 an OTA pressed a
+    minute after updating the EA add-on to 2.27.0-ea.4 sent firmware
+    v2.19.0-ea.3. emOS installs already fetch fresh (fetch_emos); this is the
+    firmware's equivalent. An install is a deliberate request and downloads
+    from GitHub anyway, so it is not gated on the update interval.
+    """
+    fresh = await fetch_firmware()
+    if fresh:
+        return fresh
+    log.warning("[api] GitHub did not answer; installing the cached release")
+    return await cached_firmware()
 
 
 async def fetch_firmware(force: bool = False) -> Optional[dict]:
@@ -389,7 +420,8 @@ def emos_latest_version() -> str:
 
 async def fetch_emos() -> Optional[dict]:
     """
-    The newest published emOS release carrying an `init` asset.
+    The newest emOS release this controller may install (em_emos_update.
+    choose_release): EA ones only on a controller that takes EA firmware.
 
     Separate from `fetch_firmware` rather than a parameter on it,
     because the two select on opposite things and share no cache: firmware is
@@ -418,28 +450,21 @@ async def fetch_emos() -> Optional[dict]:
         log.warning(f"[api] Could not poll GitHub for emOS releases: {e}")
         return None
 
-    for data in releases:
-        if data.get("draft") or data.get("prerelease"):
-            continue
-        tag = data.get("tag_name", "")
-        if not tag.startswith("emos-v"):
-            continue
-        assets = {a.get("name"): a for a in data.get("assets", [])}
-        # An `init` asset is still what makes a release selectable. That is the
-        # one every published release has carried, and requiring the newer
-        # `init32` instead would make every existing release invisible.
-        if "init" not in assets:
-            continue
-        # Every asset by name. There are two inits — one per kernel
-        # architecture — so picking one here would be picking for the caller.
-        _remember_emos(tag)
-        return {
-            "version": tag,
-            "assets": {n: {"url": a["browser_download_url"],
-                           "size": a.get("size", 0)}
-                       for n, a in assets.items() if n},
-        }
-    return None
+    # EA emOS (emos-vX.Y-ea.N) only for controllers that take EA firmware.
+    data = em_emos_update.choose_release(releases, _offers_ea_firmware())
+    if data is None:
+        return None
+    tag = data["tag_name"]
+    assets = {a.get("name"): a for a in data.get("assets", [])}
+    # Every asset by name. There are two inits — one per kernel architecture —
+    # so picking one here would be picking for the caller.
+    _remember_emos(tag)
+    return {
+        "version": tag,
+        "assets": {n: {"url": a["browser_download_url"],
+                       "size": a.get("size", 0)}
+                   for n, a in assets.items() if n},
+    }
 
 
 async def poll_loop() -> None:

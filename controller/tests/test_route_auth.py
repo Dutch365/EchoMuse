@@ -34,7 +34,7 @@ WS_SELF_AUTH = {"_ws_shell", "_ws_events"}
 
 # One route, one secret, one subnet. Not a session and not an admin bypass.
 # tests/test_internal_oww_install.py is the behaviour.
-INTERNAL_INSTALL = {"_post_internal_oww_install"}
+INTERNAL_INSTALL = {"_post_internal_oww_install", "_post_internal_led_countdown"}
 
 DECORATORS = {"require_auth", "require_admin"}
 
