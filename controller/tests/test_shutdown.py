@@ -147,7 +147,7 @@ def test_close_checkpoints_and_a_second_close_is_quiet(tmp_path):
         cols = [r[1] for r in conn.execute("PRAGMA table_info(turns)")]
     finally:
         conn.close()
-    assert version == "32"
+    assert version == "33"
     assert "fail_reason" in cols
 
 

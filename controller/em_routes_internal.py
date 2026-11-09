@@ -288,10 +288,9 @@ async def _post_internal_led_countdown(request: web.Request) -> web.Response:
     if action not in ("start", "update", "cancel"):
         return em_http.error("bad_request", "action must be start|update|cancel", 400)
 
-    import em_controller
     import em_timers
 
-    device = em_controller.get_device(device_id)
+    device = em_state.devices.get(device_id)
     if device is None:
         return em_http.error("not_found", "device not connected", 404)
     if not device.led_anim_capable:

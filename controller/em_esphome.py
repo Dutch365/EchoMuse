@@ -79,6 +79,8 @@ from zeroconf.asyncio import AsyncZeroconf
 from zeroconf import ServiceInfo
 
 import em_arbiter
+import em_boards
+import em_state
 import em_db as db
 import em_events
 import em_hostip
@@ -234,8 +236,10 @@ MDNS_NAME    = os.environ.get("MDNS_NAME", "echomuse")
 from version import VERSION as _CONTROLLER_VERSION
 # HA's ESPHome integration displays the segment after the dot in
 # project_name as the device Model (overriding DeviceInfo's model field),
-# so carry the hardware model there — not the device label.
-ESPHOME_DEVICE_MODEL = "Echo Dot Gen 2 (biscuit)"
+# so carry the hardware model there — not the device label. Per device, from
+# the board its firmware reported (em_boards).
+def device_model(device_id: str) -> str:
+    return em_boards.model(em_state.boards.get(device_id))
 
 ESPHOME_PROJECT_VERSION = os.environ.get(
     "ESPHOME_PROJECT_VERSION", _CONTROLLER_VERSION
@@ -610,12 +614,12 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                 friendly_name=f"{self.label} Voice Assistant",
                 mac_address=self.mac_address,
                 manufacturer="EchoMuse",
-                model=ESPHOME_DEVICE_MODEL,
+                model=device_model(self.device_id),
                 # CRITICAL: dot notation required — HA's manager.py does
                 # project_name.split(".") unconditionally. No dot → IndexError
                 # → device silently never appears in Devices & Services.
                 # (session handoff finding #1)
-                project_name=f"EchoMuse.{ESPHOME_DEVICE_MODEL}",
+                project_name=f"EchoMuse.{device_model(self.device_id)}",
                 project_version=ESPHOME_PROJECT_VERSION,
                 voice_assistant_feature_flags=self._voice_assistant_flags(),
             )
@@ -2181,9 +2185,17 @@ class EchoMuseSatellite(SatelliteServerProtocol):
         # keyed on _turn_cancelled, which this path deliberately never sets,
         # so it covered the thinking barge and missed the playback one it was
         # actually written for.
+        self.note_barged()
+        self.end_ha_run()
+
+    def note_barged(self) -> None:
+        """Record that this turn's reply was cut by a barge, first reason
+        winning. Separate from abort_ha_run because the flush goes out before
+        arbitration (#1007) and the device can report the end of playback in
+        that hold: the turn then finished `ok` before abort_ha_run ran (VVV
+        2026-10-23, twice)."""
         if self._turn_end_reason is None:
             self._turn_end_reason = "barged"
-        self.end_ha_run()
 
     def end_ha_run(self) -> None:
         """
@@ -3265,6 +3277,15 @@ def abort_ha_run(device_id: str) -> None:
     satellite.abort_ha_run()
 
 
+def note_barged(device_id: str) -> None:
+    """Mark the device's turn as cut off by a barge, at the flush. See
+    EchoMuseSatellite.note_barged."""
+    server = get_server(device_id)
+    satellite = server.get_satellite() if server is not None else None
+    if satellite is not None:
+        satellite.note_barged()
+
+
 async def push_media_state(device_id: str, state: str) -> None:
     """
     em_player → HA: proactive MediaPlayerStateResponse on session state
@@ -3661,7 +3682,7 @@ def _make_device_mdns_info(device_id: str, label: str, port: int,
             # required to agree, and nothing reports it if they stop.
             "mac": mac.replace(":", "").lower(),
             "network": "ethwifi",
-            "project_name": f"EchoMuse.{ESPHOME_DEVICE_MODEL}",
+            "project_name": f"EchoMuse.{device_model(device_id)}",
             "project_version": ESPHOME_PROJECT_VERSION,
         },
         server=f"{svc_name}.local.",
