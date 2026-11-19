@@ -75,6 +75,7 @@ import websockets
 from websockets.asyncio.server import ServerConnection as WebSocketServerProtocol
 
 import em_db as db
+import em_startspread
 import em_events
 import em_credentials
 import em_device_view
@@ -4775,13 +4776,25 @@ async def _on_playback_stats(device: Device, msg: dict) -> None:
     # "Streaming took Xs" times the socket write and reads
     # ~0s however slowly the device is really being fed.
     delivery_ms = -1
+    first_frame_ms = None
     if device.playback_send_t0 is not None:
         delivery_ms = int(
             (loop.time() - device.playback_send_t0) * 1000
         )
+        # Wall clock of the first frame, so lines from different Dots
+        # line up (#155).
+        first_frame_ms = int(time.time() * 1000) - delivery_ms
         device.playback_send_t0 = None
     turn_id   = device.last_turn_id
     device.last_turn_id = None
+    if turn_id is None and first_frame_ms is not None:
+        # No turn: an HA announcement (or standalone TTS). One line per
+        # Dot per announcement for the start-spread measurement (#155).
+        log.info(
+            f"[{device_id}] "
+            + em_startspread.announce_start_line(
+                first_frame_ms, pstats, delivery_ms)
+        )
     if turn_id is not None:
         await loop.run_in_executor(
             None, db.set_turn_playback,

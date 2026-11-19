@@ -85,6 +85,7 @@
  "em_speechgate.py": 67.0,
  "em_stallwatch.py": 90.0,
  "em_start.py": 0.0,
+ "em_startspread.py": 100.0,
  "em_state.py": 89.0,
  "em_support.py": 95.0,
  "em_tap_burst.py": 96.0,
