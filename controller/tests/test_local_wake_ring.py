@@ -21,9 +21,13 @@ def test_the_controller_pushes_the_listening_anim_at_registration():
     src = (CONTROLLER / "em_controller.py").read_text()
     block = src[src.index("device.led_scene     = em_scenes.resolve(config)"):]
     block = block[:2000]
-    assert '"listeningAnim"' in block, \
+    # The push itself (and its led_anim gate) lives in em_wakering since
+    # home-voice-hub #171, which also decides real spec vs {}.
+    assert "em_wakering.push_listening_anim(device)" in block, \
         "registration must hand the device its listening animation"
-    assert "led_anim_capable" in block, \
+    helper = _sources.def_source("em_wakering.listening_anim_message")
+    assert '"listeningAnim"' in helper
+    assert "led_anim_capable" in helper, \
         "firmware without local animation must keep the old behaviour"
 
 
@@ -37,7 +41,7 @@ def test_the_controller_updates_it_on_a_live_scene_change():
     src = _sources.def_source("apply_live_config")
     body = src[src.index("live.led_scene = em_scenes.resolve(effective)"):]
     body = body[:1200]
-    assert '"listeningAnim"' in body, \
+    assert "em_wakering.push_listening_anim(live)" in body, \
         "a live scene change must refresh the device's cached animation"
 
 

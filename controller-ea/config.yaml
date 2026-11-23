@@ -219,6 +219,11 @@ options:
   wake_verify_timeout_ms: 300
   # accept: a timeout or an error still wakes. reject: drop the wake.
   wake_verify_on_error: "accept"
+  # Light the listening ring only after the wake check accepts (and the
+  # wake wins arbitration), so a rejected wake shows nothing. Needs
+  # wake_verify_url; without it this does nothing. Off keeps the Echo
+  # drawing the ring at its own wake crossing.
+  wake_ring_after_verify: false
   # Shared with the add-on that installs a wake model on chosen Dots.
   # Empty disables POST /api/internal/oww_install. The value is compared
   # and then discarded; it is not logged and it does not grant any other
@@ -281,4 +286,5 @@ schema:
   wake_verify_url: "str"
   wake_verify_timeout_ms: "int(50,2000)"
   wake_verify_on_error: "list(accept|reject)"
+  wake_ring_after_verify: "bool"
   internal_install_secret: "password?"

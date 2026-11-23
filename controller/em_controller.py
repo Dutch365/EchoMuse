@@ -113,6 +113,7 @@ import em_ble_gatt
 import em_wakelevel
 import em_micqueue
 import em_wakeverify
+import em_wakering
 import em_button
 import em_wakeword
 import em_tap_burst
@@ -1668,8 +1669,11 @@ async def _leds_turn_end(device: Device):
         if anim:
             log.info(f"[{device.device_id}] Turn ended '{outcome}' — ring cue")
             if outcome == "no_ha":
-                # The listening ring is still lit from turn start (30s TTL),
-                # so this is a hold, not a repaint.
+                # A hold of the ring lit at the wake (30s TTL). Held for the
+                # wake check, it is lit here, or nothing shows on a reject.
+                if not await em_wakering.before_no_ha_hold(device, leds_listening):
+                    await leds_off(device)
+                    return
                 await asyncio.sleep(NO_HA_HOLD_S)
             await device.send_led_anim(anim)
             return
@@ -3475,6 +3479,7 @@ async def _private_barge(device: Device, ev: dict) -> None:
         log.info(f"[{device.device_id}] wake during a turn declined "
                  f"({'barge-in off' if not device.barge_in_enabled else phase or 'listening'})")
         return
+    await em_wakering.barge_ring(device, leds_listening)  # no check to wait for
     score = ev["score"]
     threshold = ev["threshold"] if ev["threshold"] is not None else device.barge_threshold
     log.info(f"[{device.device_id}] Barge-in: wake word during {phase} "
@@ -5366,16 +5371,7 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
         device.limiter_release   = float(config.get(
             "limiterRelease", em_limiter.DEFAULT_RELEASE_MS))
         device.led_scene     = em_scenes.resolve(config)
-        # #263: hand the device its current listening animation so a wake it
-        # detected ITSELF can light the ring immediately, instead of waiting
-        # for leds_listening to make the round trip (measured +522ms before
-        # the ring moved; control-plane tail reaches 2s, #139). The
-        # controller's frame still lands within an RTT and takes over — the
-        # device just stops being two hops behind its own event.
-        if device.led_anim_capable and device.led_scene.get("listening_anim"):
-            await device.send_control(
-                {"type": "config",
-                 "listeningAnim": device.led_scene["listening_anim"]})
+        await em_wakering.push_listening_anim(device)  # #263; {} under #171
         # Initialise volume from stored config — device will report its real
         # value via volume_state on connect, but this seeds a sane default
         # in the window before that first message arrives.

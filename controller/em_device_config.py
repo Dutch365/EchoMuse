@@ -14,6 +14,7 @@ import em_config_types
 import em_console_pw
 import em_esphome
 import em_turnclock
+import em_wakering
 import em_oww_sync
 import em_scenes
 import em_shadow
@@ -127,15 +128,12 @@ async def apply_live_config(device_id: str, live, effective: dict) -> None:
         live.bass_guard_db = float(effective["bassGuardDb"])
     live.led_scene = em_scenes.resolve(effective)
     # #263: keep the device's cached listening animation in step when the
-    # scene changes live, same push as at registration. Without it the ring
-    # lit locally in the OLD scene's colours until the next reconnect.
-    if live.led_anim_capable and live.led_scene.get("listening_anim"):
-        try:
-            await live.send_control(
-                {"type": "config",
-                 "listeningAnim": live.led_scene["listening_anim"]})
-        except Exception:
-            pass  # device offline — next connect re-sends it
+    # scene changes live, same push as at registration ({} while the ring
+    # waits for the wake check, #171).
+    try:
+        await em_wakering.push_listening_anim(live)
+    except Exception:
+        pass  # device offline — next connect re-sends it
     em_turnclock.apply_listen(live, effective)
 
 
