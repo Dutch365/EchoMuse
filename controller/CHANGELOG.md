@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Add-on option `wake_ring_after_verify` (`WAKE_RING_AFTER_VERIFY`), default off. With `wake_verify_url` set, the Echo no longer lights its listening ring at its own wake crossing: it is pushed `listeningAnim: {}`, and the controller lights the ring after the check accepts and arbitration is decided. A rejected wake and an arbitration loser show no light. A barge-in is lit at once, and the no-HA stand-down waits for the verdict. No firmware change. Rollback: set the option off; the add-on restarts and each Echo is pushed its ring again.
+- The `wake verify <id>` log line now ends with the check's round trip in milliseconds, including timeouts and errors.
+
 ## 2.26.13
 
 ### Added

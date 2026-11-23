@@ -350,6 +350,15 @@ configuration:
       or returns something other than {"accept": true/false}. reject drops
       that wake. The default is accept, so a checker that is down does not
       silence the house.
+  wake_ring_after_verify:
+    name: Wait for the wake check before lighting the ring
+    description: >-
+      Only used when the wake check URL is set. On, the Echo no longer
+      lights its listening ring the moment it hears the wake word; the
+      ring comes on once the checker has accepted the wake, so a rejected
+      wake shows no light. The ring appears a little later on a real
+      wake (about half a second). A barge-in still lights it at once.
+      Off by default. Changing it restarts the add-on.
   internal_install_secret:
     name: Internal wake-model install secret
     description: >-

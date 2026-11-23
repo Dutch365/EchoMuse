@@ -29,6 +29,7 @@ import base64
 import logging
 import os
 import sys
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -101,6 +102,19 @@ def inflight(device_id: str) -> asyncio.Task | None:
     return task
 
 
+def current(device_id: str) -> asyncio.Task | None:
+    """The check for this device's current wake, finished or not.
+
+    None when this wake was not sent (no URL, a private wake with no clip)
+    or when the check was abandoned: ``begin`` and ``cancel`` both bump the
+    generation, so a task from an earlier wake is never returned.
+    """
+    task = _inflight.get(device_id)
+    if task is None or getattr(task, "em_gen", None) != _gen.get(device_id):
+        return None
+    return task
+
+
 def bind_turn(device, is_wakeword: bool) -> str:
     """Clear a stale near-miss mark. A non-wake turn also drops the accept.
 
@@ -155,10 +169,17 @@ def verdict(body, *, on_error: str) -> bool:
     return on_error != "reject"
 
 
-def _fallback(cfg: Settings, device_id: str, reason: str) -> bool:
+def _elapsed_ms(t0: float) -> int:
+    return int(round((time.monotonic() - t0) * 1000.0))
+
+
+def _fallback(cfg: Settings, device_id: str, reason: str, t0: float) -> bool:
+    # The ms is the checker's whole round trip as this process saw it (POST
+    # to verdict, or to the timeout). It is always logged: it is the only
+    # measurement of what the check adds to a wake (home-voice-hub #171).
     accept = cfg.on_error != "reject"
-    log.info("wake verify %s %s — %s", device_id, reason,
-             "accept" if accept else "reject")
+    log.info("wake verify %s %s — %s (%d ms)", device_id, reason,
+             "accept" if accept else "reject", _elapsed_ms(t0))
     return accept
 
 
@@ -192,23 +213,25 @@ async def check(cfg: Settings, *, device_id: str, score, rms, pcm: bytes,
         "sample_rate": em_wake_samples.SAMPLE_RATE,
         "audio_wav_b64": base64.b64encode(wav).decode("ascii") if wav else "",
     }
+    t0 = time.monotonic()
     try:
         status, body = await post(cfg.url, payload, cfg.timeout_s)
     except asyncio.TimeoutError:
-        return _fallback(cfg, device_id, "timeout")
+        return _fallback(cfg, device_id, "timeout", t0)
     except aiohttp.ClientError:
-        return _fallback(cfg, device_id, "error")
+        return _fallback(cfg, device_id, "error", t0)
     except Exception:
         log.exception("wake verify error")
-        return _fallback(cfg, device_id, "error")
+        return _fallback(cfg, device_id, "error", t0)
     if status >= 400:
-        return _fallback(cfg, device_id, f"http {status}")
+        return _fallback(cfg, device_id, f"http {status}", t0)
     accepted = verdict(body, on_error=cfg.on_error)
     if not isinstance(body, dict) or not isinstance(body.get("accept"), bool):
-        return _fallback(cfg, device_id, "bad response")
+        return _fallback(cfg, device_id, "bad response", t0)
     if body.get("accept") is True:
         _note_explicit(device_id, gen)
-    log.info("wake verify %s — %s", device_id, "accept" if accepted else "reject")
+    log.info("wake verify %s — %s (%d ms)", device_id,
+             "accept" if accepted else "reject", _elapsed_ms(t0))
     return accepted
 
 
@@ -260,6 +283,7 @@ def begin(*, device_id: str, score, rms, pcm: bytes, streaming: bool | None,
         cfg, device_id=device_id, score=score, rms=rms, pcm=pcm, post=post,
         gen=gen))
     task.em_device_id = device_id  # type: ignore[attr-defined]
+    task.em_gen = gen  # type: ignore[attr-defined]
     _inflight[device_id] = task
     return task
 
