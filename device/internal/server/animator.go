@@ -61,8 +61,8 @@ type AnimSpec struct {
 	// Device-local: remainingSec is the value at the moment the spec arrives;
 	// the device then ticks remaining down from totalSec so Wi-Fi jitter does
 	// not judder the ring (same idea as volume N-of-12 in volume.go).
-	TotalSec     int      `json:"totalSec"`
-	RemainingSec int      `json:"remainingSec"`
+	TotalSec      int      `json:"totalSec"`
+	RemainingSec  int      `json:"remainingSec"`
 	BlinkFraction *float64 `json:"blinkFraction"` // last fraction of duration; nil → 0.10
 	BlinkFloorSec *int     `json:"blinkFloorSec"` // min blink window seconds; nil → 15
 }
@@ -296,7 +296,6 @@ func (s *Server) runMeter(gen int, spec AnimSpec) {
 		<-ticker.C
 	}
 }
-
 
 // countdownDefaults match hv-086 / Shawn tip-blink: last 10% of duration,
 // floored at 15s, so a short timer still blinks near the end.
