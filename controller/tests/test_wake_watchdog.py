@@ -28,7 +28,7 @@ CONTROLLER = Path(__file__).resolve().parents[1]
 def _listener_src() -> str:
     src = (CONTROLLER / "em_controller.py").read_text()
     start = src.index("async def wake_word_listener")
-    return src[start:start + 30_000]
+    return src[start:start + 120_000]
 
 
 def test_link_down_stands_down_before_the_ladder():

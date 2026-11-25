@@ -5,6 +5,22 @@ configuration:
     description: >-
       Network address the controller listens on. Leave this as 0.0.0.0
       to listen on all container interfaces.
+  server_port:
+    name: Device port
+    description: >-
+      The port Echo devices connect to for the control, audio and shell
+      connections. Changing it moves the port every device dials; the new
+      port is advertised over mDNS, so devices pick it up when they
+      reconnect. Change this only if something else on this host already
+      uses port 8767.
+  server_tls_port:
+    name: Encrypted device port
+    description: >-
+      The wss (TLS) port used by devices that hold pushed credentials,
+      advertised to them over the network. Change it only if another service
+      on this host already uses it — the port is meant to move, and switching
+      the listener off is not a way back: a device holding a certificate will
+      not reconnect until it is re-paired by hand.
   server_ip:
     name: Controller LAN IP address
     description: >-
@@ -358,3 +374,12 @@ configuration:
       empty to disable that call. Set the same value in both add-ons.
       It does not grant the dashboard or any other route. The value is
       not written to the log.
+  ha_volume_law:
+    name: Home Assistant volume law
+    description: >-
+      How a Home Assistant volume percentage maps to a Dot's level. legacy
+      keeps the house mapping (35% is -41.5 dB, 75% is -16 dB). stock is
+      EchoMuse 2.27's button band (1% is -35 dB, 100% is full), which is
+      louder at the same percentage: 35% becomes -23 dB and 75% -9 dB. It
+      applies to every Dot at once. Music Assistant and the volume buttons
+      use the band on the Dot either way.

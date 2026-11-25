@@ -153,6 +153,7 @@ def test_wanted_models_stays_the_one_configured_model(monkeypatch):
 
 class Shadow:
     oww_shadow_capable = True
+    mic_capable = True
     android_userspace = False
 
     async def send_control(self, msg):

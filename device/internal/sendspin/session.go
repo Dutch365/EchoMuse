@@ -402,7 +402,8 @@ func (s *session) isAdmitted() bool { return s.c.isAdmitted(s) }
 // and moves the device out of its group, so it must never be sent merely
 // because the clock is still converging. The spec's rule — never true before
 // the clock has converged — is kept by holding the first report until it
-// has (sendState), about 0.4s after activation against 9.1.1's 5s allowance.
+// has (sendState), two round trips after activation (onTime) against 9.1.1's
+// 5s allowance.
 func (s *session) available() bool { return !s.c.external() }
 
 // sendState reports availability and the player's state: on activation, on
@@ -429,7 +430,7 @@ func (s *session) sendState() {
 			Muted:             set.Muted,
 			StaticDelayMs:     set.StaticDelayMs,
 			RequiredLeadMs:    requiredLeadMs,
-			MinBufferMs:       minBufferMs,
+			MinBufferMs:       s.c.minBufferMs(),
 			SupportedCommands: []string{"set_static_delay"},
 		},
 	})
@@ -438,7 +439,8 @@ func (s *session) sendState() {
 // requiredLeadMs and minBufferMs size the server's lead. Generous on purpose:
 // this fleet's links stall for seconds (#139/#140), and the music plane that
 // works on them runs 4s ahead. A group plays at its slowest member's lead,
-// so this is also the start latency of any group an Echo is in.
+// so this is also the start latency of any group an Echo is in. minBufferMs
+// is the floor: SetMinBuffer raises it while the BLE proxy needs room.
 const (
 	requiredLeadMs = 2000
 	minBufferMs    = 2000
@@ -449,10 +451,20 @@ func (s *session) onTime(t serverTime) {
 	offset := float64((t.ServerReceived-t.ClientTransmitted)+(t.ServerTransmitted-now)) / 2
 	delay := float64((now-t.ClientTransmitted)-(t.ServerTransmitted-t.ServerReceived)) / 2
 	s.filter.update(pyRound(offset), pyRound(delay), now)
+	if !s.filter.synchronized() {
+		// Ask again at once rather than on timeSync's 200ms ladder: until
+		// the clock converges the first client/state is held, and 10.x
+		// holds this player's audio until that state arrives, then joins it
+		// to a stream already running as a late joiner, skipping ahead by
+		// its lead (~2s lost at a cold start, docs/history/device.md
+		// 2026-11-10). Two round trips instead of 200ms closes the window.
+		s.send("client/time", clientTime{ClientTransmitted: nowUs()})
+		return
+	}
 	s.mu.Lock()
 	due := s.stateDue
 	s.mu.Unlock()
-	if due && s.filter.synchronized() {
+	if due {
 		s.sendState()
 	}
 }
