@@ -1158,12 +1158,17 @@ MIGRATIONS: list[str] = [
     UPDATE system_config SET value = '31' WHERE key = 'schema_version';
     """,
 
-    # v32 — why a turn failed. NULL on a turn that did not fail, and on every
-    # row written before this column existed. A missing reason is unknown,
-    # which a 0 or an empty string would erase.
+    # v32 — the old EQ presets on top of the stock-sound voicing (#229).
+    # Speech and Music were partial driver corrections; firmware with the
+    # profile corrects the driver itself, so either would stack another
+    # +4-8dB at 250Hz on it. The work is in _fixup_v32.
+    #
+    # House (hv-084): this fork's own v32 was `turns.fail_reason`, and every
+    # live house DB is at 32 through it, so upstream's v32 never runs there.
+    # Numbering stays upstream's so a later catch-up appends v33+ unchanged;
+    # the column is _ensure_house_columns() and the EQ reset reaches house
+    # DBs through _house_eq_reset(), both after the migrations.
     """
-    ALTER TABLE turns ADD COLUMN fail_reason TEXT;
-
     UPDATE system_config SET value = '32' WHERE key = 'schema_version';
     """,
 ]
@@ -1287,8 +1292,56 @@ def _fixup_v25(conn) -> None:
         (json.dumps(cfg),))
 
 
+# The two presets the dashboard offered before the stock-sound voicing.
+_OLD_EQ_PRESETS = ([0, 4, 2, 0, -2, -5, 0, 0], [0, 8, 3, 0, -3, -6, 0, 0])
+
+
+def _reset_old_eq(cfg: dict) -> bool:
+    """Flatten an exact old preset and turn Speech boost off; True if changed."""
+    changed = False
+    bands = cfg.get("eqBands")
+    if (isinstance(bands, list) and len(bands) == 8
+            and all(isinstance(b, (int, float)) for b in bands)
+            and [float(b) for b in bands] in [[float(x) for x in p] for p in _OLD_EQ_PRESETS]):
+        cfg["eqBands"] = [0.0] * 8
+        changed = True
+    if cfg.get("eqLoudness") is True:
+        cfg["eqLoudness"] = False
+        changed = True
+    return changed
+
+
+def _fixup_v32(conn) -> None:
+    """
+    Reset the old Speech/Music presets to Flat and Speech boost to off, per
+    device and fleet. A custom curve is the owner's choice and is left alone,
+    as is a config that will not parse. Speech boost has no control any more,
+    so a stored True could never be turned off.
+    """
+    for row in conn.execute("SELECT device_id, config FROM devices").fetchall():
+        try:
+            cfg = json.loads(row["config"] or "{}") or {}
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(cfg, dict) and _reset_old_eq(cfg):
+            conn.execute("UPDATE devices SET config = ? WHERE device_id = ?",
+                         (json.dumps(cfg), row["device_id"]))
+    row = conn.execute(
+        "SELECT value FROM system_config WHERE key = 'global_device_config'").fetchone()
+    if not row:
+        return
+    try:
+        cfg = json.loads(row["value"] or "{}") or {}
+    except (json.JSONDecodeError, TypeError):
+        return
+    if isinstance(cfg, dict) and _reset_old_eq(cfg):
+        conn.execute(
+            "UPDATE system_config SET value = ? WHERE key = 'global_device_config'",
+            (json.dumps(cfg),))
+
+
 _MIGRATION_FIXUPS = {11: _fixup_v11, 19: _fixup_v19, 24: _fixup_v24,
-                     25: _fixup_v25}
+                     25: _fixup_v25, 32: _fixup_v32}
 
 # ─── Connection management ────────────────────────────────────────────────────
 
@@ -1323,7 +1376,15 @@ def init(path: str = "echomuse.db") -> None:
 
 
 def close() -> None:
-    """Checkpoint and close the connection. A second call is a no-op."""
+    """
+    Fold the WAL back into the database and close it, at shutdown.
+
+    A kill does not need this to stay intact (WAL replays on the next open),
+    but it leaves echomuse.db complete on its own, so a copy of just that file
+    (a backup, a move to another host) has every write in it. Safe to call
+    twice; any db call after it fails the init assertion. The connection is
+    cleared before close so a second call is a no-op.
+    """
     global _conn
     with _db_lock:
         conn = _conn
@@ -1335,6 +1396,7 @@ def close() -> None:
         except sqlite3.Error:
             log.warning("[db] checkpoint on close failed", exc_info=True)
         conn.close()
+    log.info("Database closed")
 
 
 @contextmanager
@@ -1449,9 +1511,16 @@ def _migrate(conn: sqlite3.Connection) -> None:
             f"the database)."
         )
 
+    # House (hv-084): read before migrating. A DB at 32 that already has
+    # `turns.fail_reason` reached 32 through the house's own v32, so
+    # upstream's v32 EQ reset never ran on it.
+    import em_house_schema
+    house_v32 = current >= 32 and em_house_schema.has_column(conn, "turns", "fail_reason")
+
     pending = MIGRATIONS[current:]
     if not pending:
         log.debug(f"Schema is current at v{current}")
+        _house_after_migrate(conn, eq_reset_pending=house_v32)
         return
 
     _backup_before_migrating(conn, current)
@@ -1476,6 +1545,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
     new_version = current + len(pending)
     log.info(f"Schema migrated to v{new_version}")
+    _house_after_migrate(conn, eq_reset_pending=house_v32)
+
+
+def _house_after_migrate(conn: sqlite3.Connection, eq_reset_pending: bool) -> None:
+    """House (hv-084): fail_reason ensure-step and the one-shot EQ reset."""
+    import em_house_schema
+    em_house_schema.after_migrate(conn, _db_path, _fixup_v32, eq_reset_pending)
+
 
 
 # ─── ESPHome identity ─────────────────────────────────────────────────────────

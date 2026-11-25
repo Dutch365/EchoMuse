@@ -38,6 +38,8 @@ WAKE_MODEL = Path("oww_models") / "hey_leo_v6.onnx"
 # that quietly does nothing.
 OPTION_ENV_VARS = {
     "server_host": "SERVER_HOST",
+    "server_port": "SERVER_PORT",
+    "server_tls_port": "SERVER_TLS_PORT",
     "server_ip": "SERVER_IP",
     "mdns_name": "MDNS_NAME",
     "esphome_project_version": "ESPHOME_PROJECT_VERSION",

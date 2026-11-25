@@ -238,10 +238,11 @@ async def reconcile(device_id: str, live) -> bool:
     effective = await loop.run_in_executor(
         None, db.get_effective_device_config, device_id
     )
-    # Firmware that cannot load a runtime can use none of this. The wake word
-    # MODE is deliberately not checked: every device carries the full set, so
-    # a mode switch never waits on an install (em_oww_assets.reconcile_action).
-    if not live.oww_shadow_capable:
+    # Firmware that cannot load a runtime can use none of this, and neither can
+    # an Echo with no microphone it can read. The wake word MODE is
+    # deliberately not checked: every device carries the full set, so a mode
+    # switch never waits on an install (em_oww_assets.reconcile_action).
+    if not live.oww_shadow_capable or not live.mic_capable:
         return True
     mode_off = em_shadow.normalise_mode(effective.get("owwOnDevice")) == em_shadow.MODE_OFF
 
@@ -300,10 +301,15 @@ async def reconcile(device_id: str, live) -> bool:
                         f"the missing assets ({result.get('error')})")
         return False
 
-    if action == "deaf":
-        # The device builds its scorer from the config push, so it needs telling
-        # the model is now there — same mechanism install_then_switch relies on.
+    # The device builds its scorer from the config push, so it needs telling
+    # when what it builds from has changed: a classifier it was deaf without
+    # (the mechanism install_then_switch relies on), or the streaming
+    # embedding model, which a running scorer otherwise only picks up at the
+    # next restart (#893).
+    stream_arrived = em_oww_assets.STREAM_NAME in (result.get("pushed") or [])
+    if action == "deaf" or stream_arrived:
         await live.send_control({"type": "config", **em_config_types.well_typed(device_id, effective)})
+    if action == "deaf":
         await em_events.push_log(
             device_id, "info", "controller",
             f"Wake word model {missing} installed — listening for its wake word again"

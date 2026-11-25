@@ -177,9 +177,9 @@ def test_migrations_are_append_only():
     broke every stats write and disconnect-looped the fleet when it happened.
     """
     assert len(db.MIGRATIONS) == 32
-    # v32 is its own entry (fail_reason), not appended onto v31.
-    assert "fail_reason" in db.MIGRATIONS[31]
-    assert "fail_reason" not in db.MIGRATIONS[30]
+    # House (hv-084): the house fail_reason column is not a migration; upstream
+    # numbering is kept so later catch-ups append unchanged.
+    assert not any("fail_reason" in m for m in db.MIGRATIONS)
     # v30 is its own entry (emos_version, emos_build), not appended onto v29.
     assert "emos_version" in db.MIGRATIONS[29]
     assert "emos_version" not in db.MIGRATIONS[28]

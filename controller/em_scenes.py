@@ -26,7 +26,6 @@ NUM_LEDS = 12
 # brightness itself when it renders a pulse.
 LINK_ORANGE = (255, 40, 0)
 
-
 def _solid(r: int, g: int, b: int) -> list:
     return [(r, g, b)] * NUM_LEDS
 
