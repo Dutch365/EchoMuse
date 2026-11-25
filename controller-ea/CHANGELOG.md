@@ -189,6 +189,20 @@ Lighter on a small controller, and the 5 second wake stall is fixed. Pair with f
 
 @Dutch365 (#946, #967) and @forming (#720).
 
+## 2.27.1-hv084
+
+House build (Dutch365/home-voice-hub#84): upstream controller 2.27.1 with every house change kept. Installed as the local add-on, never from the published image.
+
+### Changed
+
+- Upstream 2.27.0 and 2.27.1 merged in. The first start resets the Speech and Music EQ presets to Flat and turns Speech boost off, on every Echo and in fleet settings. A custom curve is kept. A backup is written beside the database first (`echomuse.db.pre-v32-house-eq.bak`), and the reset runs once.
+- The database stays at schema 32, so the previous house controller can still open it after a rollback.
+
+### Added
+
+- `ha_volume_law` (default `legacy`): how an HA volume percentage maps to a Dot level. `legacy` keeps today's loudness; `stock` is upstream's button band, louder at the same percentage (35% is +18.5 dB, 75% is +7 dB).
+- Rollback: reinstall the previous local add-on (dev-917084c). Restore the backup only if the old EQ presets matter.
+
 ## 2.27.1
 
 One fix on top of 2.27.0. Pair with firmware v2.19.0 and emOS v0.11, which this controller offers. No database changes.
