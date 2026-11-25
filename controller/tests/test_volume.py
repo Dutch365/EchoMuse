@@ -14,6 +14,13 @@ import pytest
 import em_volume
 
 
+@pytest.fixture(autouse=True)
+def _stock_law(monkeypatch):
+    """These pin upstream's band law and its Go twin; the house default
+    (legacy) is tests/test_volume_law_option.py."""
+    monkeypatch.setattr(em_volume, "LAW", em_volume.LAW_STOCK)
+
+
 def test_ceiling_is_codec_unity_not_the_controls_maximum():
     # tinymix ctl 61 accepts 0..175. 127 is 0dB; everything above it is
     # POSITIVE digital gain on near-full-scale PCM and clips inside the DAC

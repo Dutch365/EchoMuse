@@ -236,6 +236,10 @@ options:
   # and then discarded; it is not logged and it does not grant any other
   # route.
   internal_install_secret: ""
+  # hv-084: how an HA volume percentage maps to a Dot level. legacy keeps the
+  # house law, round(v * 127); stock is upstream 2.27's button band
+  # (1% = -35 dB, 100% = unity), which is louder at the same percentage.
+  ha_volume_law: legacy
 schema:
   server_host: "str"
   server_port: "int(1,65535)"
@@ -296,3 +300,4 @@ schema:
   wake_verify_timeout_ms: "int(50,2000)"
   wake_verify_on_error: "list(accept|reject)"
   internal_install_secret: "password?"
+  ha_volume_law: "list(legacy|stock)"

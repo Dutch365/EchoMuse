@@ -23,7 +23,11 @@ device/internal/server/volume.go for the full measurement and why stock
 FireOS never touches this control).
 """
 
+import logging
 import math
+import os
+
+log = logging.getLogger("echomuse")
 
 # Codec unity gain. The mixer control accepts up to 175; everything above
 # this clips. See the module docstring.
@@ -45,7 +49,7 @@ def level_to_db(level: int) -> float:
     return (level - DEVICE_VOLUME_MAX) * DB_PER_STEP
 
 
-def device_level_to_ha(level: int) -> float:
+def _stock_device_level_to_ha(level: int) -> float:
     """Convert a device volume level to an HA float (0.0–1.0): 0 for silent,
     0.01 for anything audible at or below the floor (0 would read as muted),
     else the level's place in the band."""
@@ -61,7 +65,7 @@ def device_level_to_ha(level: int) -> float:
     return (1 + (level - VOLUME_FLOOR) / (DEVICE_VOLUME_MAX - VOLUME_FLOOR) * 99) / 100
 
 
-def ha_volume_to_device(volume: float) -> int:
+def _stock_ha_volume_to_device(volume: float) -> int:
     """Convert an HA volume float (0.0–1.0) to a device volume level.
 
     Clamped to the codec's unity gain, so HA asking for full volume can never
@@ -75,6 +79,65 @@ def ha_volume_to_device(volume: float) -> int:
         return DEVICE_VOLUME_MAX
     n = max(0, math.floor((pct - 1) / 99 * VOLUME_STEPS + 0.5))
     return VOLUME_FLOOR + n * VOLUME_STEP
+
+
+# ─── House (hv-084): which law HA percentages use ─────────────────────────────
+#
+# Upstream 2.27 maps HA's percentage onto the 36-level button band above
+# (1% = -35dB, 100% = unity). The house controller before hv-084 mapped it in
+# proportion over the whole control, round(v * 127), and the house automations
+# (night 35%, announcements 75%) are tuned to that: under the band law 35% is
+# +18.5dB louder and 75% +7dB. One controller drives every Dot, so the law is
+# an add-on option (`ha_volume_law`, env HA_VOLUME_LAW): "legacy" (default)
+# keeps the proportional law everywhere the controller converts an HA/API
+# percentage; "stock" is upstream's band. Button steps and Sendspin's
+# PercentToLevel are firmware-side and use the band either way.
+#
+# Read here, not swapped as functions: em_controller binds aliases to
+# ha_volume_to_device / device_level_to_ha at import.
+
+LAW_LEGACY = "legacy"
+LAW_STOCK = "stock"
+LAWS = (LAW_LEGACY, LAW_STOCK)
+
+
+def _law_from_env() -> str:
+    raw = (os.environ.get("HA_VOLUME_LAW") or LAW_LEGACY).strip().lower()
+    if raw not in LAWS:
+        log.warning(f"[volume] HA_VOLUME_LAW={raw!r} is not one of {LAWS}; using legacy")
+        return LAW_LEGACY
+    return raw
+
+
+LAW = _law_from_env()
+
+
+def _legacy_device_level_to_ha(level: int) -> float:
+    """House law before hv-084: level / 127, clamped to 0.0–1.0."""
+    try:
+        return max(0.0, min(1.0, float(level) / DEVICE_VOLUME_MAX))
+    except (TypeError, ValueError, ZeroDivisionError):
+        return 0.0
+
+
+def _legacy_ha_volume_to_device(volume: float) -> int:
+    """House law before hv-084: round(v * 127), clamped to 0..127 (unity)."""
+    return max(0, min(DEVICE_VOLUME_MAX, round(float(volume) * DEVICE_VOLUME_MAX)))
+
+
+def device_level_to_ha(level: int) -> float:
+    """Device level -> HA float (0.0–1.0) under the configured law."""
+    if LAW == LAW_STOCK:
+        return _stock_device_level_to_ha(level)
+    return _legacy_device_level_to_ha(level)
+
+
+def ha_volume_to_device(volume: float) -> int:
+    """HA float (0.0–1.0) -> device level under the configured law. Never
+    above unity (127) under either."""
+    if LAW == LAW_STOCK:
+        return _stock_ha_volume_to_device(volume)
+    return _legacy_ha_volume_to_device(volume)
 
 
 # ─── The stock-sound profile's volume law (#229) ──────────────────────────────
