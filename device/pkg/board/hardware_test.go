@@ -487,7 +487,7 @@ func TestTLVJackIsStocks(t *testing.T) {
 	cases := []struct {
 		ctls      []Ctl
 		gain, mux string
-	}{{tlvJack.Insert, "11", "On"}, {tlvJack.Remove, "6", "Off"}}
+	}{{tlvJack.Insert, "6", "On"}, {tlvJack.Remove, "6", "Off"}}
 	for _, c := range cases {
 		g := value(c.ctls, "HP Driver Gain Volume")
 		if len(g) != 2 || g[0] != c.gain || g[1] != c.gain {

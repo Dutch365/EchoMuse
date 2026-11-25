@@ -72,7 +72,14 @@ const tlvAmp = "Ext_Speaker_Amp_Switch"
 var tlvJack = Jack{
 	Insert: []Ctl{
 		{tlvAmp, []string{"Off"}},
-		{"HP Driver Gain Volume", []string{"11", "11"}},
+		// Stock's HAL uses 11 (+5 dB). House Dots play through the jack into
+		// powered speaker docks, and a voice reply crackles there around 90%
+		// and above: the PCM is already near full scale and the extra analog
+		// gain drives the dock into clipping. 6 is 0 dB on this 1 dB/step
+		// control (0 = -6 dB), the same value removal leaves, so the jack
+		// stays at line level. Headphones on this fork are about 5 dB quieter
+		// than a stock Dot.
+		{"HP Driver Gain Volume", []string{"6", "6"}},
 		{"Audio_DacMux_Setting", []string{"On"}},
 	},
 	Remove: []Ctl{

@@ -57,14 +57,14 @@ func TestJackRoutingDriftRewritesOnlyWhatMoved(t *testing.T) {
 		t.Fatalf("want only the gain rewritten, got %+v", drift)
 	}
 	// FireOS 5's mediaserver puts the mux back too.
-	drift = jackRoutingDrift(biscuitJack, true, map[string]string{amp: "Off", gain: "11", mux: "Off"})
+	drift = jackRoutingDrift(biscuitJack, true, map[string]string{amp: "Off", gain: "6", mux: "Off"})
 	if len(drift) != 1 || drift[0].Ctl != mux || drift[0].Args[0] != "On" {
 		t.Errorf("want only the mux rewritten On, got %+v", drift)
 	}
 }
 
 func TestJackRoutingDriftIsSilentWhenNothingMoved(t *testing.T) {
-	if d := jackRoutingDrift(biscuitJack, true, map[string]string{amp: "Off", gain: "11", mux: "On"}); len(d) != 0 {
+	if d := jackRoutingDrift(biscuitJack, true, map[string]string{amp: "Off", gain: "6", mux: "On"}); len(d) != 0 {
 		t.Errorf("want no writes on a correct codec, got %+v", d)
 	}
 }
