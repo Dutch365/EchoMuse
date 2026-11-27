@@ -53,6 +53,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # GHCR image names must be lowercase, and this fork's owner is
+      # "Dutch365", so the raw owner name cannot go into a tag as is.
+      - name: Lowercase image owner
+        run: echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
       # EM_CONTROLLER_VERSION is baked into the image (ARG -> ENV in the
       # Dockerfile), so it has to be known at BUILD time — and at build time
       # the tag does not exist yet. controller/config.yaml's `version:` is
@@ -101,7 +106,7 @@ jobs:
           build-args: |
             EM_CONTROLLER_VERSION=${{ steps.version.outputs.version }}
             APT_SNAPSHOT=${{ steps.version.outputs.apt }}
-          tags: ghcr.io/${{ github.repository_owner }}/echomuse-controller:${{ steps.version.outputs.sha }}
+          tags: ghcr.io/${{ env.OWNER_LC }}/echomuse-controller:${{ steps.version.outputs.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -112,7 +117,7 @@ jobs:
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-name: ghcr.io/${{ github.repository_owner }}/echomuse-controller
+          subject-name: ghcr.io/${{ env.OWNER_LC }}/echomuse-controller
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
@@ -126,7 +131,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq qemu-user-static
           controller/tools/cpu_baseline_check.sh \
-            ghcr.io/${{ github.repository_owner }}/echomuse-controller@${{ steps.build.outputs.digest }}
+            ghcr.io/${{ env.OWNER_LC }}/echomuse-controller@${{ steps.build.outputs.digest }}
 
       # The arm64 half of the same image under a Cortex-A53 (Pi 3; the Pi 4's
       # A72 has the same ARMv8.0 set). Emulated on this x86 runner, about a
@@ -136,7 +141,7 @@ jobs:
       - name: CPU baseline (Cortex-A53, arm64)
         run: |
           controller/tools/cpu_baseline_check.sh \
-            ghcr.io/${{ github.repository_owner }}/echomuse-controller@${{ steps.build.outputs.digest }} \
+            ghcr.io/${{ env.OWNER_LC }}/echomuse-controller@${{ steps.build.outputs.digest }} \
             arm64
 
       # By digest, for the reason the release workflow documents: there is
@@ -151,7 +156,7 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
-          image-ref: ghcr.io/${{ github.repository_owner }}/echomuse-controller@${{ steps.build.outputs.digest }}
+          image-ref: ghcr.io/${{ env.OWNER_LC }}/echomuse-controller@${{ steps.build.outputs.digest }}
           format: cyclonedx
           output: sbom-${{ steps.version.outputs.sha }}.cdx.json
 
@@ -171,7 +176,7 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
-          image-ref: ghcr.io/${{ github.repository_owner }}/echomuse-controller@${{ steps.build.outputs.digest }}
+          image-ref: ghcr.io/${{ env.OWNER_LC }}/echomuse-controller@${{ steps.build.outputs.digest }}
           format: table
           severity: HIGH,CRITICAL
           exit-code: '0'

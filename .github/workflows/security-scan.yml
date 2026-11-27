@@ -27,6 +27,7 @@ on:
 
 permissions:
   contents: read
+  packages: read          # pull the image when the package is private
   security-events: write
 
 jobs:
@@ -36,14 +37,41 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # GHCR image names must be lowercase, and this fork's owner is
+      # "Dutch365", so the raw owner name cannot go into a tag as is.
+      - name: Lowercase image owner
+        run: echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # `latest` only exists once a controller release has been published
+      # from this repository. Until then there is nothing to scan, which is
+      # a notice, not a failure.
+      - name: Is there a published image?
+        id: published
+        run: |
+          ref="ghcr.io/${OWNER_LC}/echomuse-controller:latest"
+          if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$ref is not published yet; nothing to scan"
+          fi
+
       # `latest` rather than a pinned version on purpose: this asks about the
       # image users are pulling today, which is what docker-compose.deploy.yml
       # gives them.
       - name: Scan for fixable HIGH/CRITICAL vulnerabilities
+        if: steps.published.outputs.found == 'true'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
-          image-ref: ghcr.io/${{ github.repository_owner }}/echomuse-controller:latest
+          image-ref: ghcr.io/${{ env.OWNER_LC }}/echomuse-controller:latest
           format: table
           severity: HIGH,CRITICAL
           ignore-unfixed: true
@@ -53,11 +81,11 @@ jobs:
       # this workflow exists, so they must reach the Security tab rather than
       # only the run log, where nobody goes looking.
       - name: Scan again for SARIF
-        if: always()
+        if: always() && steps.published.outputs.found == 'true'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
-          image-ref: ghcr.io/${{ github.repository_owner }}/echomuse-controller:latest
+          image-ref: ghcr.io/${{ env.OWNER_LC }}/echomuse-controller:latest
           format: sarif
           output: trivy-results.sarif
           severity: MEDIUM,HIGH,CRITICAL
@@ -66,7 +94,7 @@ jobs:
       # continue-on-error so that losing the upload never hides the scan
       # result itself, which is already in the step above.
       - name: Upload results to code scanning
-        if: always()
+        if: always() && steps.published.outputs.found == 'true'
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
